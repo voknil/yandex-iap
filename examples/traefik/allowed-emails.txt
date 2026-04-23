@@ -1,0 +1,4 @@
+# One email per line. Lines starting with '#' and blank lines are ignored.
+# Edits are picked up within ~5 seconds — no restart needed.
+alice@yandex.ru
+bob@example.com
