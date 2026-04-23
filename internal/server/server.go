@@ -115,9 +115,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	email := user.PrimaryEmail()
 	if !s.Whitelist.Allowed(email) {
 		s.Log.Info("access denied", "email", email)
-		renderError(w, http.StatusForbidden,
-			"Access denied: "+email+" is not on the allow-list.\n"+
-				"Доступ запрещён: "+email+" не в списке разрешённых.")
+		renderAccessDenied(w, email)
 		return
 	}
 
@@ -182,12 +180,31 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleLogout wipes the session cookie and returns to rd= (or root).
+//
+// Query parameters:
+//
+//	rd       — URL to return the user to (constrained to the cookie domain)
+//	switch=1 — also route through Yandex Passport logout, so the user can
+//	           pick a different Yandex account on the next login. Without
+//	           this parameter Yandex would silently sign them back in.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	s.clearSessionCookie(w)
+
 	rd := sanitizeRedirect(r.URL.Query().Get("rd"), s.Cfg)
 	if rd == "" {
 		rd = s.Cfg.LoginRedirectDefault
 	}
+
+	if r.URL.Query().Get("switch") == "1" {
+		// Yandex Passport honours `retpath` and sends the browser back there
+		// after the session is dropped. Then our /auth/login kicks in and the
+		// user sees Yandex's account-picker instead of the auto-confirm flow.
+		passportLogout := "https://passport.yandex.ru/passport?mode=logout&yu=0&retpath=" +
+			url.QueryEscape(rd)
+		http.Redirect(w, r, passportLogout, http.StatusFound)
+		return
+	}
+
 	http.Redirect(w, r, rd, http.StatusFound)
 }
 
@@ -307,4 +324,88 @@ func renderError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(code)
 	_, _ = w.Write([]byte(msg + "\n"))
+}
+
+// renderAccessDenied serves a branded 403 page that explains which email was
+// rejected and offers a "Switch account" button routed through Yandex logout.
+func renderAccessDenied(w http.ResponseWriter, email string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(accessDeniedHTML(email)))
+}
+
+func accessDeniedHTML(email string) string {
+	// Keep this inline so the binary is still a single static file with no
+	// embedded-filesystem dance. The template uses only html-safe literals
+	// plus a single interpolated email which we html-escape.
+	safeEmail := htmlEscape(email)
+	return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Access denied</title>
+  <style>
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: #f4f4f5; color: #18181b;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .card {
+      background: #ffffff; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.08);
+      padding: 40px 36px; max-width: 420px; width: calc(100% - 32px); text-align: center;
+    }
+    .badge { font-size: 40px; line-height: 1; margin-bottom: 16px; }
+    h1 { font-size: 20px; font-weight: 600; margin: 0 0 12px; }
+    p  { margin: 0 0 12px; color: #52525b; font-size: 15px; line-height: 1.5; }
+    .email { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: #f4f4f5; padding: 2px 6px; border-radius: 6px; color: #18181b; }
+    .actions { display: flex; flex-direction: column; gap: 10px; margin-top: 22px; }
+    .btn {
+      display: inline-block; padding: 10px 16px; border-radius: 10px; font-weight: 500;
+      text-decoration: none; font-size: 15px; border: 1px solid transparent; cursor: pointer;
+    }
+    .btn-primary { background: #18181b; color: #fafafa; }
+    .btn-primary:hover { background: #27272a; }
+    .btn-secondary { background: transparent; color: #18181b; border-color: #d4d4d8; }
+    .btn-secondary:hover { background: #f4f4f5; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #09090b; color: #fafafa; }
+      .card { background: #18181b; box-shadow: 0 10px 30px rgba(0,0,0,.6); }
+      p { color: #a1a1aa; }
+      .email { background: #27272a; color: #fafafa; }
+      .btn-primary { background: #fafafa; color: #09090b; }
+      .btn-primary:hover { background: #e4e4e7; }
+      .btn-secondary { color: #fafafa; border-color: #3f3f46; }
+      .btn-secondary:hover { background: #27272a; }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="badge">🔒</div>
+    <h1>Доступ запрещён</h1>
+    <p>Email <span class="email">` + safeEmail + `</span> не входит в список разрешённых для этого окружения.</p>
+    <p>Если это ошибка — попросите администратора добавить вас в whitelist, либо войдите под другим аккаунтом Яндекса.</p>
+    <div class="actions">
+      <a class="btn btn-primary" href="/auth/logout?switch=1">Сменить аккаунт</a>
+      <a class="btn btn-secondary" href="https://passport.yandex.ru/">Открыть Яндекс Паспорт</a>
+    </div>
+  </main>
+</body>
+</html>`
+}
+
+// htmlEscape replaces the five HTML-significant characters so the email can be
+// safely interpolated into the response body. We avoid pulling in
+// html/template just for a single string.
+func htmlEscape(s string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\"", "&quot;",
+		"'", "&#39;",
+	)
+	return replacer.Replace(s)
 }
