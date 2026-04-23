@@ -214,21 +214,30 @@ All knobs are environment variables.
 
 ### File ownership for mounted volumes
 
-The image runs as the distroless `nonroot` user (**UID 65532**). Both the whitelist file
-and the tokens file need to be readable by that UID, and (if you want admins to edit
-them via the web UI) writable too. Easy recipe on the host:
+The image runs as the distroless `nonroot` user (**UID 65532**). Writing to the
+files is not enough — `allowed-emails.txt` and `tokens.json` both get
+rewritten atomically (tempfile + `rename`), so yandex-iap needs write access
+to the **directory that contains them** too, not just the files themselves.
+
+**Recommended**: bind-mount a whole directory, own it by UID 65532.
 
 ```bash
-sudo chown 65532:65532 allowed-emails.txt tokens.json
-sudo chmod 0644 allowed-emails.txt tokens.json
+mkdir -p iap-data
+printf '# seed here\nalice@yandex.ru\n' > iap-data/allowed-emails.txt
+printf '[]\n'                             > iap-data/tokens.json
+sudo chown -R 65532:65532 iap-data
 ```
-
-Or bind-mount a whole directory you own:
 
 ```yaml
 volumes:
-  - ./iap-data:/etc/iap  # put allowed-emails.txt and tokens.json inside
+  - ./iap-data:/etc/iap:rw
 ```
+
+…and point `WHITELIST_FILE=/etc/iap/allowed-emails.txt` and `TOKENS_FILE=/etc/iap/tokens.json` at them.
+
+**Not recommended**: bind-mounting the two files individually. The container's
+`/etc/iap` would belong to `root` (docker defaults), the atomic rewrite would
+need to create `/etc/iap/.iap-tokens-XXXX` as UID 65532 and get `permission denied`.
 
 ## Endpoints
 
