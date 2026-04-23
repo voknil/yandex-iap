@@ -1,0 +1,24 @@
+# Build artifacts
+/yandex-iap
+*.test
+*.out
+dist/
+/coverage.*
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Local overrides
+.env
+.env.local
+/examples/*/.env
+/examples/*/acme/
+
+# Secrets / keys — never commit
+*.pem
+*_rsa
+*_ed25519
+!*.pub

@@ -1,0 +1,62 @@
+# Minimal runnable example: Traefik + yandex-iap + a demo app behind it.
+#
+# 1. Register an OAuth app at https://oauth.yandex.ru/client/new with
+#    redirect URI https://app.example.com/auth/callback.
+# 2. Copy .env.example to .env and fill in YANDEX_CLIENT_ID / YANDEX_CLIENT_SECRET.
+# 3. Point DNS A record app.example.com at this machine.
+# 4. `docker compose up -d` — Traefik will obtain a Let's Encrypt cert on first access.
+# 5. Open https://app.example.com/ — you'll be redirected through Yandex login.
+
+services:
+  traefik:
+    image: traefik:v3.6
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/acme/acme.json
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./acme:/acme
+
+  iap:
+    image: ghcr.io/voknil/yandex-iap:latest
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./allowed-emails.txt:/etc/iap/allowed-emails.txt:ro
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.iap.loadbalancer.server.port=9090
+      # /auth/* routes to IAP (bare, no middleware)
+      - traefik.http.routers.iap.rule=Host(`${APP_DOMAIN}`) && PathPrefix(`/auth`)
+      - traefik.http.routers.iap.entrypoints=websecure
+      - traefik.http.routers.iap.tls=true
+      - traefik.http.routers.iap.tls.certresolver=le
+      - traefik.http.routers.iap.service=iap
+      # ForwardAuth middleware other services will reference
+      - traefik.http.middlewares.iap-auth.forwardauth.address=http://iap:9090/auth/verify
+      - traefik.http.middlewares.iap-auth.forwardauth.trustForwardHeader=true
+      - traefik.http.middlewares.iap-auth.forwardauth.authResponseHeaders=X-Auth-Email,X-Auth-Name
+
+  app:
+    image: traefik/whoami
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.app.rule=Host(`${APP_DOMAIN}`)
+      - traefik.http.routers.app.entrypoints=websecure
+      - traefik.http.routers.app.tls=true
+      - traefik.http.routers.app.tls.certresolver=le
+      - traefik.http.routers.app.middlewares=iap-auth@docker
+      - traefik.http.services.app.loadbalancer.server.port=80
