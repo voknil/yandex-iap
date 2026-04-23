@@ -12,6 +12,7 @@ import (
 
 	"github.com/voknil/yandex-iap/internal/config"
 	"github.com/voknil/yandex-iap/internal/session"
+	"github.com/voknil/yandex-iap/internal/tokens"
 	"github.com/voknil/yandex-iap/internal/whitelist"
 	"github.com/voknil/yandex-iap/internal/yandex"
 )
@@ -21,6 +22,7 @@ type Server struct {
 	Cfg       *config.Config
 	OAuth     *yandex.Client
 	Whitelist whitelist.Store
+	Tokens    tokens.Store
 	Log       *slog.Logger
 
 	// Now is injected so tests can fix the clock; production uses time.Now.
@@ -29,13 +31,17 @@ type Server struct {
 
 // New wires a Server.
 func New(cfg *config.Config, log *slog.Logger) *Server {
-	return &Server{
+	s := &Server{
 		Cfg:       cfg,
 		OAuth:     yandex.New(cfg.ClientID, cfg.ClientSecret, cfg.CallbackURL.String()),
 		Whitelist: whitelist.New(cfg.WhitelistFile, 5*time.Second),
 		Log:       log,
 		Now:       time.Now,
 	}
+	if cfg.TokensFile != "" {
+		s.Tokens = tokens.NewFile(cfg.TokensFile, 5*time.Second)
+	}
+	return s
 }
 
 // Router returns an http.Handler with all public routes registered.
@@ -56,6 +62,8 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("GET /auth/admin", s.handleAdminPage)
 	mux.HandleFunc("POST /auth/admin/add", s.handleAdminAdd)
 	mux.HandleFunc("POST /auth/admin/remove", s.handleAdminRemove)
+	mux.HandleFunc("POST /auth/admin/tokens/create", s.handleAdminTokenCreate)
+	mux.HandleFunc("POST /auth/admin/tokens/delete", s.handleAdminTokenDelete)
 	// Root catch-all: redirect to login, so hitting the bare IAP domain does
 	// something useful rather than 404.
 	mux.HandleFunc("GET /", s.handleRootFallback)
@@ -161,6 +169,25 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bearer token path — used by CI jobs, smoke-test scripts, AI agents that
+	// cannot complete an interactive OAuth flow. We probe this first so a
+	// forgotten human cookie on the same curl doesn't silently take precedence.
+	if s.Tokens != nil {
+		if tok := bearerFromRequest(r); tok != "" {
+			if rec, ok := s.Tokens.Validate(tok); ok {
+				w.Header().Set("X-Auth-Email", "token:"+rec.Name)
+				w.Header().Set("X-Auth-Token-Id", rec.ID)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			s.Log.Info("bearer token rejected",
+				"last4", lastN(tok, 4), "path", origURI)
+			// Don't redirect a machine client to a browser login page.
+			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	c, err := r.Cookie(s.Cfg.CookieName)
 	if err != nil {
 		s.redirectToLogin(w, r)
@@ -183,6 +210,33 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Auth-Name", p.Name)
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// bearerFromRequest extracts a bearer token either from the Authorization
+// header ("Authorization: Bearer <token>") or from a forwarded-through header
+// that upstream proxies may set. Returns "" when nothing plausible is present.
+func bearerFromRequest(r *http.Request) string {
+	// Forward-auth subrequests get the original headers under X-Forwarded-*.
+	// We check the real "Authorization" header first (some reverse proxies
+	// propagate it directly) and then the forwarded variant.
+	for _, name := range []string{"Authorization", "X-Forwarded-Authorization"} {
+		v := r.Header.Get(name)
+		if v == "" {
+			continue
+		}
+		const prefix = "Bearer "
+		if len(v) > len(prefix) && strings.EqualFold(v[:len(prefix)], prefix) {
+			return strings.TrimSpace(v[len(prefix):])
+		}
+	}
+	return ""
+}
+
+func lastN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 // handleLogout wipes the session cookie and returns to rd= (or root).
