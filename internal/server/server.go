@@ -43,6 +43,10 @@ func (s *Server) Router() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /auth/login", s.handleLogin)
 	mux.HandleFunc("GET /auth/callback", s.handleCallback)
+	// Compatibility alias: oauth2-proxy and most tutorials use "/oauth2/callback"
+	// as the OAuth redirect URI, so a Yandex app registered for that path keeps
+	// working without having to re-register anything. The handler is the same.
+	mux.HandleFunc("GET /oauth2/callback", s.handleCallback)
 	mux.HandleFunc("GET /auth/verify", s.handleVerify)
 	mux.HandleFunc("GET /auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /auth/healthz", s.handleHealthz)
