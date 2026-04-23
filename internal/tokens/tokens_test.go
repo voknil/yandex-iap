@@ -12,7 +12,7 @@ func TestCreateValidateDelete(t *testing.T) {
 	path := filepath.Join(dir, "tokens.json")
 	f := NewFile(path, 0)
 
-	rec, plaintext, err := f.Create("claude smoke", "admin@example.com")
+	rec, plaintext, err := f.Create("cypress smoke", "admin@example.com")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

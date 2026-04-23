@@ -43,7 +43,7 @@ type Config struct {
 	WhitelistFile string
 
 	// TokensFile is the path to a JSON file backing static bearer tokens for
-	// non-interactive clients (CI jobs, smoke-test scripts, AI agents). Empty
+	// non-interactive clients (CI jobs, smoke-test scripts, automation). Empty
 	// disables that code path entirely — only cookie-based sessions authenticate.
 	TokensFile string
 
