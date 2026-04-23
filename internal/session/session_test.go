@@ -38,7 +38,12 @@ func TestVerifyRejectsTamperedPayload(t *testing.T) {
 func TestVerifyRejectsTamperedSignature(t *testing.T) {
 	tok, _ := Issue(testKey, "user@example.com", "", time.Minute)
 	parts := strings.SplitN(tok, ".", 2)
-	tampered := parts[0] + "." + parts[1][:len(parts[1])-1] + "X"
+	// Flip a bit in the last byte to guarantee the signature changes.
+	// Picking a fixed replacement char leaves a 1/64 chance the original
+	// already ended in that char, making the test flaky.
+	b := []byte(parts[1])
+	b[len(b)-1] ^= 0x01
+	tampered := parts[0] + "." + string(b)
 	if _, err := Verify(testKey, tampered); err != ErrInvalid {
 		t.Errorf("expected ErrInvalid, got %v", err)
 	}
@@ -83,7 +88,9 @@ func TestStateRejectsExpired(t *testing.T) {
 func TestStateRejectsTampering(t *testing.T) {
 	s, _ := SignState(testKey, "/", time.Minute)
 	parts := strings.SplitN(s, ".", 2)
-	tampered := parts[0] + "." + parts[1][:len(parts[1])-1] + "A"
+	b := []byte(parts[1])
+	b[len(b)-1] ^= 0x01
+	tampered := parts[0] + "." + string(b)
 	if _, err := VerifyState(testKey, tampered); err != ErrInvalid {
 		t.Errorf("expected ErrInvalid, got %v", err)
 	}
