@@ -38,6 +38,8 @@ On failure, the user is redirected to `/auth/login`, which starts an OAuth dance
 - **Single binary, ~8 MB image** (distroless-static base, `nonroot` user).
 - **Stateless** — session cookies are signed with HMAC-SHA256; no Redis/DB.
 - **Whitelist hot-reload** — edit `allowed-emails.txt`, changes are picked up within seconds, no restart.
+- **Built-in admin UI** at `/auth/admin` — manage the whitelist and static tokens in the browser (gated by `ADMIN_EMAILS`).
+- **Static bearer tokens** for CI jobs / smoke tests / AI agents that can't do an interactive OAuth dance. Generated in the UI, stored as SHA-256 hashes, validated in constant time, revocable.
 - **Skip-auth regex** for health endpoints (`/healthz`, `/api/health` …).
 - **Open-redirect safe** — post-login redirects are constrained to the cookie domain.
 - **Multi-arch image** (`linux/amd64`, `linux/arm64`) published to GHCR.
@@ -195,6 +197,7 @@ All knobs are environment variables.
 | `COOKIE_DOMAIN` | Cookie domain (e.g. `.example.com` to share across subdomains, or `app.example.com` to restrict) |
 | `COOKIE_SECRET` | Random string ≥ 32 chars (`openssl rand -base64 32`). **Rotate to invalidate all sessions.** |
 | `WHITELIST_FILE` | Path to the newline-delimited allow-list inside the container |
+| `ADMIN_EMAILS` | Comma-separated list of admins allowed to open `/auth/admin`. Other whitelist users see 403 on that path. |
 
 ### Optional
 
@@ -205,18 +208,66 @@ All knobs are environment variables.
 | `COOKIE_TTL` | `24h` | How long a session remains valid |
 | `SKIP_AUTH_REGEX` | *(empty)* | Regex against `X-Forwarded-Uri`; matches bypass authentication. E.g. `^/(healthz|api/health)$` |
 | `LOGIN_REDIRECT_DEFAULT` | `/` | Fallback redirect when `rd` is missing or invalid |
+| `TOKENS_FILE` | *(empty)* | Path to a JSON file for static bearer tokens. Empty disables tokens entirely (no Bearer probing in `/verify`, no card in `/admin`). |
 | `LISTEN` | `:9090` | TCP bind address |
 | `LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
+
+### File ownership for mounted volumes
+
+The image runs as the distroless `nonroot` user (**UID 65532**). Both the whitelist file
+and the tokens file need to be readable by that UID, and (if you want admins to edit
+them via the web UI) writable too. Easy recipe on the host:
+
+```bash
+sudo chown 65532:65532 allowed-emails.txt tokens.json
+sudo chmod 0644 allowed-emails.txt tokens.json
+```
+
+Or bind-mount a whole directory you own:
+
+```yaml
+volumes:
+  - ./iap-data:/etc/iap  # put allowed-emails.txt and tokens.json inside
+```
 
 ## Endpoints
 
 | Path | Purpose |
 |---|---|
 | `GET /auth/login?rd=<url>` | Start OAuth flow. `rd` is remembered (signed in the `state` param) and honoured after callback. |
-| `GET /auth/callback` | Yandex redirects here with `code` + `state`. Sets the session cookie and redirects back to `rd`. |
-| `GET /auth/verify` | Forward-auth endpoint. `200` + identity headers = allow, `302 /auth/login` = deny. |
-| `GET /auth/logout?rd=<url>` | Clear the session cookie and redirect. |
+| `GET /auth/callback` *(alias: `/oauth2/callback`)* | Yandex redirects here with `code` + `state`. Sets the session cookie and redirects back to `rd`. |
+| `GET /auth/verify` | Forward-auth endpoint. `200` + identity headers = allow, `302 /auth/login` = deny for humans, `401` for bad bearer tokens. |
+| `GET /auth/logout?rd=<url>&switch=1` | Clear the session cookie. `switch=1` also routes through Yandex Passport logout so the next login can pick a different account. |
 | `GET /auth/healthz` | JSON liveness + whitelist size. Always public. |
+| `GET /auth/admin` | Admin UI — whitelist table + static-tokens table. Requires a cookie from an `ADMIN_EMAILS` user. |
+| `POST /auth/admin/{add,remove}` | Whitelist mutations. CSRF-protected. |
+| `POST /auth/admin/tokens/{create,delete}` | Static-token mutations. CSRF-protected. |
+
+## Static bearer tokens
+
+For CI jobs, smoke-test scripts and AI agents that can't complete an interactive
+OAuth flow, admins can mint long-lived bearer tokens at `/auth/admin`.
+
+```bash
+# In the UI: name the token ("claude smoke tests"), click "Создать". The
+# plaintext value (yiap_<40 hex>) is displayed ONCE — save it immediately.
+
+# Use it from any client:
+curl -H "Authorization: Bearer yiap_abc..." https://app.example.com/
+
+# Upstream apps see these headers on a successful token auth:
+#   X-Auth-Email:    token:<name>     (prefix makes machine identities obvious in audit logs)
+#   X-Auth-Token-Id: tok_<8 hex>      (stable handle for revocation)
+```
+
+Properties:
+
+- 160-bit entropy (`crypto/rand`)
+- Persisted as SHA-256 hash + last-4 fingerprint only — a leaked file does not expose active credentials
+- Constant-time comparison on validate
+- Invalid tokens return `401` (not `302` to a login page) — curl/Postman-friendly
+- Revoke instantly from the UI; any in-flight request using the old token gets 401
+- Forwarded through `X-Forwarded-Authorization` as well as `Authorization`, so reverse proxies that mangle the original header can re-inject it
 
 ## Security notes
 
