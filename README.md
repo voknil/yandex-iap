@@ -39,7 +39,7 @@ On failure, the user is redirected to `/auth/login`, which starts an OAuth dance
 - **Stateless** — session cookies are signed with HMAC-SHA256; no Redis/DB.
 - **Whitelist hot-reload** — edit `allowed-emails.txt`, changes are picked up within seconds, no restart.
 - **Built-in admin UI** at `/auth/admin` — manage the whitelist and static tokens in the browser (gated by `ADMIN_EMAILS`).
-- **Static bearer tokens** for CI jobs / smoke tests / AI agents that can't do an interactive OAuth dance. Generated in the UI, stored as SHA-256 hashes, validated in constant time, revocable.
+- **Static bearer tokens** for CI jobs / smoke tests / automation that can't do an interactive OAuth dance. Generated in the UI, stored as SHA-256 hashes, validated in constant time, revocable.
 - **Skip-auth regex** for health endpoints (`/healthz`, `/api/health` …).
 - **Open-redirect safe** — post-login redirects are constrained to the cookie domain.
 - **Multi-arch image** (`linux/amd64`, `linux/arm64`) published to GHCR.
@@ -254,11 +254,11 @@ need to create `/etc/iap/.iap-tokens-XXXX` as UID 65532 and get `permission deni
 
 ## Static bearer tokens
 
-For CI jobs, smoke-test scripts and AI agents that can't complete an interactive
+For CI jobs, smoke-test scripts and any automation that can't complete an interactive
 OAuth flow, admins can mint long-lived bearer tokens at `/auth/admin`.
 
 ```bash
-# In the UI: name the token ("claude smoke tests"), click "Создать". The
+# In the UI: name the token ("cypress smoke tests"), click "Создать". The
 # plaintext value (yiap_<40 hex>) is displayed ONCE — save it immediately.
 
 # Use it from any client:

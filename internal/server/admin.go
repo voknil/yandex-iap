@@ -370,7 +370,7 @@ func renderTokensCard(csrf string, toks []tokens.Record) string {
 	rows.WriteString(`<p class="sub">Bearer-токены для автотестов / CI / non-interactive клиентов. Используются как <code class="mono">Authorization: Bearer yiap_…</code>. Выдаются один раз при создании, на диске хранится только SHA-256 хэш.</p>`)
 	rows.WriteString(`<form class="add" method="post" action="/auth/admin/tokens/create">`)
 	rows.WriteString(`<input type="hidden" name="_csrf" value="` + htmlEscape(csrf) + `">`)
-	rows.WriteString(`<input type="text" name="name" placeholder="claude smoke tests" required maxlength="80">`)
+	rows.WriteString(`<input type="text" name="name" placeholder="cypress smoke tests" required maxlength="80">`)
 	rows.WriteString(`<button type="submit">Создать токен</button>`)
 	rows.WriteString(`</form>`)
 	if len(toks) == 0 {

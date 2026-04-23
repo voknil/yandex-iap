@@ -169,7 +169,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Bearer token path — used by CI jobs, smoke-test scripts, AI agents that
+	// Bearer token path — used by CI jobs, smoke-test scripts and automation that
 	// cannot complete an interactive OAuth flow. We probe this first so a
 	// forgotten human cookie on the same curl doesn't silently take precedence.
 	if s.Tokens != nil {

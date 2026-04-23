@@ -1,5 +1,5 @@
 // Package tokens stores long-lived bearer tokens used by automated clients
-// (smoke tests, CI jobs, AI agents) that can't complete an interactive OAuth
+// (smoke tests, CI jobs, automation scripts) that can't complete an interactive OAuth
 // flow.
 //
 // A token is issued once at creation time (format: "yiap_<40 hex chars>") and
@@ -37,7 +37,7 @@ type Record struct {
 	ID string `json:"id"`
 
 	// Name is a free-text label the admin picked at creation time —
-	// e.g. "claude smoke tests", "cypress ci".
+	// e.g. "cypress ci", "uptime probe", "metrics scraper".
 	Name string `json:"name"`
 
 	// Hash is the lowercase-hex SHA-256 of the token bytes.
