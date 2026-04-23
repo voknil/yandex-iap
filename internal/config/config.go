@@ -42,6 +42,11 @@ type Config struct {
 	// Re-read on every auth decision, so edits take effect without restart.
 	WhitelistFile string
 
+	// TokensFile is the path to a JSON file backing static bearer tokens for
+	// non-interactive clients (CI jobs, smoke-test scripts, AI agents). Empty
+	// disables that code path entirely — only cookie-based sessions authenticate.
+	TokensFile string
+
 	// SkipAuthRegex, when non-nil, lets requests whose original URI matches
 	// bypass authentication (e.g. "^/healthz$" for uptime checks).
 	SkipAuthRegex *regexp.Regexp
@@ -131,6 +136,8 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	cfg.TokensFile = strings.TrimSpace(os.Getenv("TOKENS_FILE"))
 
 	if v := os.Getenv("SCOPES"); v != "" {
 		cfg.Scopes = strings.Fields(v)
