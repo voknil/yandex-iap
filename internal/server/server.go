@@ -20,7 +20,7 @@ import (
 type Server struct {
 	Cfg       *config.Config
 	OAuth     *yandex.Client
-	Whitelist whitelist.Checker
+	Whitelist whitelist.Store
 	Log       *slog.Logger
 
 	// Now is injected so tests can fix the clock; production uses time.Now.
@@ -50,6 +50,12 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("GET /auth/verify", s.handleVerify)
 	mux.HandleFunc("GET /auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /auth/healthz", s.handleHealthz)
+	// Admin UI for whitelist management. The auth page itself is CORS-free
+	// and only accepts requests with an IAP cookie issued for an ADMIN_EMAILS
+	// user; see requireAdmin.
+	mux.HandleFunc("GET /auth/admin", s.handleAdminPage)
+	mux.HandleFunc("POST /auth/admin/add", s.handleAdminAdd)
+	mux.HandleFunc("POST /auth/admin/remove", s.handleAdminRemove)
 	// Root catch-all: redirect to login, so hitting the bare IAP domain does
 	// something useful rather than 404.
 	mux.HandleFunc("GET /", s.handleRootFallback)

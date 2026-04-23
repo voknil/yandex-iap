@@ -46,6 +46,12 @@ type Config struct {
 	// bypass authentication (e.g. "^/healthz$" for uptime checks).
 	SkipAuthRegex *regexp.Regexp
 
+	// AdminEmails is the set of emails allowed to use /auth/admin.
+	// Admins are the only users who can add/remove entries in the main
+	// whitelist via the web UI. This list is in-memory only; edit the env
+	// var and restart the process to change it.
+	AdminEmails map[string]struct{}
+
 	// LoginRedirectDefault is where /auth/logout (and post-login fallback) points
 	// if no explicit `rd` parameter is supplied.
 	LoginRedirectDefault string
@@ -156,7 +162,27 @@ func Load() (*Config, error) {
 		cfg.LogLevel = v
 	}
 
+	if v := os.Getenv("ADMIN_EMAILS"); v != "" {
+		cfg.AdminEmails = make(map[string]struct{})
+		for _, raw := range strings.Split(v, ",") {
+			e := strings.ToLower(strings.TrimSpace(raw))
+			if e != "" {
+				cfg.AdminEmails[e] = struct{}{}
+			}
+		}
+	}
+
 	return cfg, nil
+}
+
+// IsAdmin reports whether the given email is allowed to use /auth/admin.
+// Matching is case-insensitive and whitespace-trimmed.
+func (c *Config) IsAdmin(email string) bool {
+	if c.AdminEmails == nil {
+		return false
+	}
+	_, ok := c.AdminEmails[strings.ToLower(strings.TrimSpace(email))]
+	return ok
 }
 
 // SecretFingerprint returns the first 8 hex chars of the cookie-secret digest,
