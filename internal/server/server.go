@@ -217,15 +217,23 @@ func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	// URL via X-Forwarded-*. Reconstruct it verbatim for the `rd` parameter.
 	rd := rebuildOriginalURL(r)
 
+	// Build an absolute Location. Traefik's ForwardAuth resolves relative Locations
+	// against the IAP's internal address (http://iap:9090/…), which leaks the
+	// container name to the browser. Anchor on X-Forwarded-Proto + X-Forwarded-Host
+	// so the browser bounces back to the same public hostname it came from.
+	proto := r.Header.Get("X-Forwarded-Proto")
+	host := r.Header.Get("X-Forwarded-Host")
+	if proto == "" {
+		proto = "https"
+	}
 	loginURL := "/auth/login"
+	if host != "" {
+		loginURL = proto + "://" + host + "/auth/login"
+	}
 	if rd != "" {
 		loginURL += "?rd=" + url.QueryEscape(rd)
 	}
 	w.Header().Set("Location", loginURL)
-	// 401 tells Traefik to propagate the Location to the browser; some setups
-	// (e.g. nginx auth_request) prefer 302 — controlled by the reverse proxy,
-	// not us. 401 works for Traefik when used with authResponseHeaders.
-	// We set 302 to be permissive across proxies.
 	w.WriteHeader(http.StatusFound)
 }
 
