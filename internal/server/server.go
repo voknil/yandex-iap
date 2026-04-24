@@ -253,7 +253,13 @@ func bearerFromRequest(r *http.Request) string {
 		}
 		const prefix = "Bearer "
 		if len(v) > len(prefix) && strings.EqualFold(v[:len(prefix)], prefix) {
-			return strings.TrimSpace(v[len(prefix):])
+			tok := strings.TrimSpace(v[len(prefix):])
+			// Only treat tokens starting with "yiap_" as IAP tokens.
+			// Third-party JWTs (e.g. app-level Bearer tokens starting with "eyJ")
+			// are ignored here so the request falls through to the cookie check.
+			if strings.HasPrefix(tok, "yiap_") {
+				return tok
+			}
 		}
 	}
 	return ""
