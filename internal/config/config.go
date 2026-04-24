@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"regexp"
@@ -37,6 +38,12 @@ type Config struct {
 
 	// CookieTTL is how long a signed session cookie stays valid.
 	CookieTTL time.Duration
+
+	// CookieSameSite controls the SameSite attribute of the session cookie.
+	// "Lax" is safe for single-domain deployments. Multi-subdomain setups where
+	// the browser makes cross-origin XHR/fetch calls between the front and a
+	// sibling API subdomain need "None" (with Secure=true, which we always set).
+	CookieSameSite http.SameSite
 
 	// WhitelistFile is the path to a newline-delimited list of allowed emails.
 	// Re-read on every auth decision, so edits take effect without restart.
@@ -80,6 +87,7 @@ type Config struct {
 //	SCOPES              (default "login:email login:info")
 //	COOKIE_NAME         (default "_yiap")
 //	COOKIE_TTL          (default "24h")
+//	COOKIE_SAMESITE     (default "lax" — "none", "lax", "strict")
 //	SKIP_AUTH_REGEX     (default empty — no bypass)
 //	LOGIN_REDIRECT_DEFAULT (default "/")
 //	LISTEN              (default ":9090")
@@ -89,6 +97,7 @@ func Load() (*Config, error) {
 		Scopes:               []string{"login:email", "login:info"},
 		CookieName:           "_yiap",
 		CookieTTL:            24 * time.Hour,
+		CookieSameSite:       http.SameSiteLaxMode,
 		LoginRedirectDefault: "/",
 		Listen:               ":9090",
 		LogLevel:             "info",
@@ -151,6 +160,18 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("COOKIE_TTL: %w", err)
 		}
 		cfg.CookieTTL = d
+	}
+	if v := os.Getenv("COOKIE_SAMESITE"); v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "none":
+			cfg.CookieSameSite = http.SameSiteNoneMode
+		case "lax":
+			cfg.CookieSameSite = http.SameSiteLaxMode
+		case "strict":
+			cfg.CookieSameSite = http.SameSiteStrictMode
+		default:
+			return nil, fmt.Errorf("COOKIE_SAMESITE: expected one of none|lax|strict, got %q", v)
+		}
 	}
 	if v := os.Getenv("SKIP_AUTH_REGEX"); v != "" {
 		re, err := regexp.Compile(v)

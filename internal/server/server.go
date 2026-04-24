@@ -163,6 +163,33 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 // We reconstruct the original URL from those when redirecting to /auth/login
 // so users land back on the exact page they tried to open.
 func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
+	// CORS headers are attached to every response — including the 302 we emit
+	// for anonymous browser requests — so a credentialed cross-origin fetch
+	// can read the response and let the application redirect to login itself
+	// instead of the browser silently blocking on missing CORS headers.
+	s.writeCORSHeaders(w, r)
+
+	// CORS preflight: the browser sends OPTIONS with Access-Control-Request-*
+	// headers before the real cross-origin request. Traefik forwards those
+	// with X-Forwarded-Method=OPTIONS. There's nothing to authenticate yet
+	// (cookies aren't even sent on preflights), so we short-circuit with the
+	// CORS allowances and let the real request flow through auth.
+	if r.Header.Get("X-Forwarded-Method") == "OPTIONS" &&
+		r.Header.Get("Access-Control-Request-Method") != "" &&
+		r.Header.Get("Origin") != "" &&
+		isSameSiteOrigin(r.Header.Get("Origin"), s.Cfg.CookieDomain) {
+		h := w.Header()
+		h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		if reqHeaders := r.Header.Get("Access-Control-Request-Headers"); reqHeaders != "" {
+			h.Set("Access-Control-Allow-Headers", reqHeaders)
+		} else {
+			h.Set("Access-Control-Allow-Headers", "*")
+		}
+		h.Set("Access-Control-Max-Age", "600")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	origURI := r.Header.Get("X-Forwarded-Uri")
 	if s.Cfg.SkipAuthRegex != nil && origURI != "" && s.Cfg.SkipAuthRegex.MatchString(origURI) {
 		w.WriteHeader(http.StatusOK)
@@ -340,7 +367,7 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, value string) {
 		Expires:  s.Now().Add(s.Cfg.CookieTTL),
 		Secure:   true,
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: s.Cfg.CookieSameSite,
 	})
 }
 
@@ -354,8 +381,39 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 		MaxAge:   -1,
 		Secure:   true,
 		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: s.Cfg.CookieSameSite,
 	})
+}
+
+// writeCORSHeaders reflects the caller's Origin back as
+// Access-Control-Allow-Origin when the origin is same-site with CookieDomain,
+// and attaches the headers a credentialed cross-origin fetch needs to succeed.
+//
+// We reflect instead of using "*" because browsers reject "*" whenever
+// Allow-Credentials is true, and IAP sessions are cookie-based so credentialed
+// requests are the only useful case.
+func (s *Server) writeCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" || !isSameSiteOrigin(origin, s.Cfg.CookieDomain) {
+		return
+	}
+	h := w.Header()
+	h.Set("Access-Control-Allow-Origin", origin)
+	h.Set("Access-Control-Allow-Credentials", "true")
+	h.Add("Vary", "Origin")
+}
+
+// isSameSiteOrigin reports whether the Origin header value is a URL whose host
+// equals CookieDomain or a subdomain of it. Same rule as sanitizeRedirect, but
+// scoped to the Origin header format (no path, no query).
+func isSameSiteOrigin(origin, cookieDomain string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	dom := strings.TrimPrefix(cookieDomain, ".")
+	host := strings.ToLower(u.Hostname())
+	return host == dom || strings.HasSuffix(host, "."+dom)
 }
 
 // sanitizeRedirect keeps only URLs within the cookie domain to prevent
