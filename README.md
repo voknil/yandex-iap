@@ -206,6 +206,7 @@ All knobs are environment variables.
 | `SCOPES` | `login:email login:info` | Space-separated OAuth scopes |
 | `COOKIE_NAME` | `_yiap` | Name of the session cookie |
 | `COOKIE_TTL` | `24h` | How long a session remains valid |
+| `COOKIE_SAMESITE` | `lax` | `SameSite` attribute of the session cookie: `lax`, `none`, or `strict`. Use `none` for multi-subdomain deployments where the browser makes credentialed cross-origin fetches between sibling subdomains — the cookie is always marked `Secure`, so `None` is safe. |
 | `SKIP_AUTH_REGEX` | *(empty)* | Regex against `X-Forwarded-Uri`; matches bypass authentication. E.g. `^/(healthz|api/health)$` |
 | `LOGIN_REDIRECT_DEFAULT` | `/` | Fallback redirect when `rd` is missing or invalid |
 | `TOKENS_FILE` | *(empty)* | Path to a JSON file for static bearer tokens. Empty disables tokens entirely (no Bearer probing in `/verify`, no card in `/admin`). |
