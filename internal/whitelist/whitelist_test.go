@@ -154,3 +154,34 @@ func equalSlices(a, b []string) bool {
 	}
 	return true
 }
+
+func TestWildcardDomain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wl")
+	if err := os.WriteFile(path, []byte("boss@other.org\n@Corp.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wl := New(path, 0)
+	for email, want := range map[string]bool{
+		"anyone@corp.com":     true,
+		"ANYONE@Corp.COM":     true,
+		"boss@other.org":      true,
+		"x@other.org":         false,
+		"a@sub.corp.com":      false,
+		"a@corp.com.evil.com": false,
+		"a@b@corp.com":        false,
+		"@corp.com":           false,
+	} {
+		if got := wl.Allowed(email); got != want {
+			t.Errorf("Allowed(%q) = %v, want %v", email, got, want)
+		}
+	}
+	if err := wl.Add("*@new.io"); err != nil || !wl.Allowed("u@new.io") {
+		t.Errorf("adding a wildcard failed: %v", err)
+	}
+	if err := wl.Add("@bad"); err == nil {
+		t.Error("a wildcard without a dotted domain must be rejected")
+	}
+	if err := wl.Remove("@new.io"); err != nil || wl.Allowed("u@new.io") {
+		t.Errorf("removing a wildcard failed: %v", err)
+	}
+}
