@@ -98,3 +98,36 @@ func TestStateRejectsTampering(t *testing.T) {
 		t.Errorf("expected ErrInvalid, got %v", err)
 	}
 }
+
+func TestVerifyAnyRotation(t *testing.T) {
+	oldKey, newKey := []byte("old-key-old-key-old-key-old-key!"), []byte("new-key-new-key-new-key-new-key!")
+	tok, err := Issue(oldKey, "a@example.com", "A", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyAny([][]byte{newKey}, tok); err == nil {
+		t.Error("token must not verify under an unrelated key")
+	}
+	if p, err := VerifyAny([][]byte{newKey, oldKey}, tok); err != nil || p.Email != "a@example.com" {
+		t.Errorf("token must verify under a previous key: %v", err)
+	}
+}
+
+func TestLoginStateNonce(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	st, err := SignLoginState(key, "/x", "n-1", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rd, n, err := VerifyLoginState([][]byte{key}, st)
+	if err != nil || rd != "/x" || n != "n-1" {
+		t.Fatalf("got %q %q %v", rd, n, err)
+	}
+	expired, _ := SignLoginState(key, "/x", "n", -time.Second)
+	if _, _, err := VerifyLoginState([][]byte{key}, expired); err == nil {
+		t.Error("expired state must be rejected")
+	}
+	if _, _, err := VerifyLoginState([][]byte{key}, st+"x"); err == nil {
+		t.Error("tampered state must be rejected")
+	}
+}

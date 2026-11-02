@@ -25,7 +25,7 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) string {
 		s.redirectToLogin(w, r)
 		return ""
 	}
-	p, err := session.Verify(s.Cfg.CookieSecret, c.Value)
+	p, err := session.VerifyAny(s.Cfg.VerifyKeys(), c.Value)
 	if err != nil {
 		s.redirectToLogin(w, r)
 		return ""
@@ -196,7 +196,7 @@ func (s *Server) handleAdminRemove(w http.ResponseWriter, r *http.Request) {
 // adminCSRFTTL. Since SignState embeds a TTL and binds the redirect param to
 // the HMAC, we reuse it: the "redirect" payload is the admin's email.
 func (s *Server) csrfOK(adminEmail, token string) bool {
-	embedded, err := session.VerifyState(s.Cfg.CookieSecret, token)
+	embedded, err := session.VerifyStateAny(s.Cfg.VerifyKeys(), token)
 	if err != nil {
 		return false
 	}

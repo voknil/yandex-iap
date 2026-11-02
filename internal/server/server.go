@@ -3,6 +3,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,11 @@ import (
 	"github.com/voknil/yandex-iap/internal/tokens"
 	"github.com/voknil/yandex-iap/internal/whitelist"
 	"github.com/voknil/yandex-iap/internal/yandex"
+)
+
+const (
+	loginStateTTL   = 10 * time.Minute
+	nonceCookieName = "_yiap_login"
 )
 
 // Server holds dependencies shared across handlers.
@@ -47,12 +53,13 @@ func New(cfg *config.Config, log *slog.Logger) *Server {
 // Router returns an http.Handler with all public routes registered.
 func (s *Server) Router() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /auth/login", s.handleLogin)
-	mux.HandleFunc("GET /auth/callback", s.handleCallback)
+	limit := newRateLimiter(s.Cfg.RateLimit, time.Minute, s.Cfg.TrustForwardedFor, s.Now).middleware
+	mux.Handle("GET /auth/login", limit(http.HandlerFunc(s.handleLogin)))
+	mux.Handle("GET /auth/callback", limit(http.HandlerFunc(s.handleCallback)))
 	// Compatibility alias: oauth2-proxy and most tutorials use "/oauth2/callback"
 	// as the OAuth redirect URI, so a Yandex app registered for that path keeps
 	// working without having to re-register anything. The handler is the same.
-	mux.HandleFunc("GET /oauth2/callback", s.handleCallback)
+	mux.Handle("GET /oauth2/callback", limit(http.HandlerFunc(s.handleCallback)))
 	mux.HandleFunc("GET /auth/verify", s.handleVerify)
 	mux.HandleFunc("GET /auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /auth/healthz", s.handleHealthz)
@@ -78,12 +85,14 @@ func (s *Server) Router() http.Handler {
 // successful callback.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	rd := sanitizeRedirect(r.URL.Query().Get("rd"), s.Cfg)
-	state, err := session.SignState(s.Cfg.CookieSecret, rd, 10*time.Minute)
+	nonce := newNonce()
+	state, err := session.SignLoginState(s.Cfg.CookieSecret, rd, nonce, loginStateTTL)
 	if err != nil {
 		s.Log.Error("sign state", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	s.setNonceCookie(w, nonce)
 	url := s.OAuth.AuthorizeURL(state, s.Cfg.ScopesJoined())
 	http.Redirect(w, r, url, http.StatusFound) //nolint:gosec // target is the fixed Yandex authorize endpoint
 }
@@ -106,10 +115,20 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		renderError(w, http.StatusBadRequest, "missing code or state")
 		return
 	}
-	redirect, err := session.VerifyState(s.Cfg.CookieSecret, stateParam)
+	redirect, nonce, err := session.VerifyLoginState(s.Cfg.VerifyKeys(), stateParam)
 	if err != nil {
 		s.Log.Warn("invalid state")
 		renderError(w, http.StatusBadRequest, "invalid or expired login state — try again")
+		return
+	}
+	// The state must come back in the same browser that started the login;
+	// otherwise an attacker could feed a victim a callback URL for the
+	// attacker's own Yandex account (login CSRF).
+	c, cerr := r.Cookie(nonceCookieName)
+	s.clearNonceCookie(w)
+	if cerr != nil || nonce == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(nonce)) != 1 {
+		s.Log.Warn("login state does not match this browser")
+		renderError(w, http.StatusBadRequest, "login was not started in this browser — try again")
 		return
 	}
 
@@ -220,7 +239,7 @@ func (s *Server) handleVerify(w http.ResponseWriter, r *http.Request) {
 		s.redirectToLogin(w, r)
 		return
 	}
-	p, err := session.Verify(s.Cfg.CookieSecret, c.Value)
+	p, err := session.VerifyAny(s.Cfg.VerifyKeys(), c.Value)
 	if err != nil {
 		s.redirectToLogin(w, r)
 		return
@@ -374,6 +393,30 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, value string) {
 		Secure:   true,
 		HttpOnly: true,
 		SameSite: s.Cfg.CookieSameSite,
+	})
+}
+
+func (s *Server) setNonceCookie(w http.ResponseWriter, nonce string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     nonceCookieName,
+		Value:    nonce,
+		Path:     "/auth",
+		MaxAge:   int(loginStateTTL.Seconds()),
+		Secure:   true,
+		HttpOnly: true,
+		// Lax: the cookie must accompany the top-level redirect back from Yandex.
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (s *Server) clearNonceCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     nonceCookieName,
+		Path:     "/auth",
+		MaxAge:   -1,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 

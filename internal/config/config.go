@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,6 +36,18 @@ type Config struct {
 
 	// CookieSecret is the HMAC key used to sign cookies and state parameters.
 	CookieSecret []byte
+
+	// PreviousSecrets are older cookie secrets still accepted for verification
+	// (never for signing) so the secret can be rotated without logging everyone out.
+	PreviousSecrets [][]byte
+
+	// RateLimit is the number of login/callback requests per minute allowed from
+	// one client address; 0 disables limiting.
+	RateLimit int
+
+	// TrustForwardedFor makes the rate limiter key on the last X-Forwarded-For
+	// entry (the address the reverse proxy saw) instead of the socket peer.
+	TrustForwardedFor bool
 
 	// CookieTTL is how long a signed session cookie stays valid.
 	CookieTTL time.Duration
@@ -85,6 +98,9 @@ type Config struct {
 // Optional (with defaults):
 //
 //	SCOPES              (default "login:email login:info")
+//	COOKIE_SECRET_PREVIOUS (comma-separated old secrets, verify-only, for rotation)
+//	RATE_LIMIT          (default 60 login/callback requests per minute per client; 0 = off)
+//	TRUST_FORWARDED_FOR (default false — key the rate limit on X-Forwarded-For)
 //	COOKIE_NAME         (default "_yiap")
 //	COOKIE_TTL          (default "24h")
 //	COOKIE_SAMESITE     (default "lax" — "none", "lax", "strict")
@@ -100,6 +116,7 @@ func Load() (*Config, error) {
 		CookieSameSite:       http.SameSiteLaxMode,
 		LoginRedirectDefault: "/",
 		Listen:               ":9090",
+		RateLimit:            60,
 		LogLevel:             "info",
 	}
 
@@ -140,6 +157,32 @@ func Load() (*Config, error) {
 	// Derive a 32-byte key deterministically so users can pick any shape of secret.
 	sum := sha256.Sum256([]byte(rawSecret))
 	cfg.CookieSecret = sum[:]
+
+	for _, raw := range strings.Split(os.Getenv("COOKIE_SECRET_PREVIOUS"), ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if len(raw) < 32 {
+			return nil, fmt.Errorf("COOKIE_SECRET_PREVIOUS entries must be at least 32 characters")
+		}
+		prev := sha256.Sum256([]byte(raw))
+		cfg.PreviousSecrets = append(cfg.PreviousSecrets, prev[:])
+	}
+	if v := strings.TrimSpace(os.Getenv("RATE_LIMIT")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("RATE_LIMIT: expected a non-negative integer, got %q", v)
+		}
+		cfg.RateLimit = n
+	}
+	if v := strings.TrimSpace(os.Getenv("TRUST_FORWARDED_FOR")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("TRUST_FORWARDED_FOR: %w", err)
+		}
+		cfg.TrustForwardedFor = b
+	}
 
 	cfg.WhitelistFile, err = requireEnv("WHITELIST_FILE")
 	if err != nil {
@@ -211,6 +254,12 @@ func (c *Config) IsAdmin(email string) bool {
 	}
 	_, ok := c.AdminEmails[strings.ToLower(strings.TrimSpace(email))]
 	return ok
+}
+
+// VerifyKeys returns the keys a signature may be verified with: the current
+// secret first, then the previous ones.
+func (c *Config) VerifyKeys() [][]byte {
+	return append([][]byte{c.CookieSecret}, c.PreviousSecrets...)
 }
 
 // SecretFingerprint returns the first 8 hex chars of the cookie-secret digest,
