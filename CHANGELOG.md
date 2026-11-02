@@ -42,7 +42,14 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - `*@example.com` (or `@example.com`) whitelist entries admit a whole domain.
 - `yandex-iap -version` and `yandex-iap -healthcheck`; the Docker image now has a `HEALTHCHECK`.
 
+- **Token expiry.** Static tokens get a lifetime chosen in the admin UI (7 days to 1 year, or
+  never); expired tokens stop validating and are marked in the list. Records without
+  `expires_at` keep working as before.
+- **Prometheus metrics** (`yiap_requests_total` by endpoint and status) on a separate listener,
+  enabled with `METRICS_LISTEN`; never exposed on the public port.
+
 ### Changed
+- `tokens.Store.Create` takes a lifetime argument.
 - Yandex endpoints are configurable on the client (used by tests against a fake server).
 - Test coverage raised across `config`, `yandex`, `session` and the full login flow.
 - Docker image `:latest` now points to the latest **release**; builds from `main`

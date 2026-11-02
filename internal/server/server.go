@@ -31,6 +31,8 @@ type Server struct {
 	Tokens    tokens.Store
 	Log       *slog.Logger
 
+	metrics *metrics
+
 	// Now is injected so tests can fix the clock; production uses time.Now.
 	Now func() time.Time
 }
@@ -42,6 +44,7 @@ func New(cfg *config.Config, log *slog.Logger) *Server {
 		OAuth:     yandex.New(cfg.ClientID, cfg.ClientSecret, cfg.CallbackURL.String()),
 		Whitelist: whitelist.New(cfg.WhitelistFile, 5*time.Second),
 		Log:       log,
+		metrics:   newMetrics(),
 		Now:       time.Now,
 	}
 	if cfg.TokensFile != "" {
@@ -50,17 +53,26 @@ func New(cfg *config.Config, log *slog.Logger) *Server {
 	return s
 }
 
+// m instruments a handler; a Server built without New (as in some tests) has no
+// metrics and passes the handler through unchanged.
+func (s *Server) m(endpoint string, h http.Handler) http.Handler {
+	if s.metrics == nil {
+		return h
+	}
+	return s.metrics.count(endpoint, h)
+}
+
 // Router returns an http.Handler with all public routes registered.
 func (s *Server) Router() http.Handler {
 	mux := http.NewServeMux()
 	limit := newRateLimiter(s.Cfg.RateLimit, time.Minute, s.Cfg.TrustForwardedFor, s.Now).middleware
-	mux.Handle("GET /auth/login", limit(http.HandlerFunc(s.handleLogin)))
-	mux.Handle("GET /auth/callback", limit(http.HandlerFunc(s.handleCallback)))
+	mux.Handle("GET /auth/login", s.m("login", limit(http.HandlerFunc(s.handleLogin))))
+	mux.Handle("GET /auth/callback", s.m("callback", limit(http.HandlerFunc(s.handleCallback))))
 	// Compatibility alias: oauth2-proxy and most tutorials use "/oauth2/callback"
 	// as the OAuth redirect URI, so a Yandex app registered for that path keeps
 	// working without having to re-register anything. The handler is the same.
-	mux.Handle("GET /oauth2/callback", limit(http.HandlerFunc(s.handleCallback)))
-	mux.HandleFunc("GET /auth/verify", s.handleVerify)
+	mux.Handle("GET /oauth2/callback", s.m("callback", limit(http.HandlerFunc(s.handleCallback))))
+	mux.Handle("GET /auth/verify", s.m("verify", http.HandlerFunc(s.handleVerify)))
 	mux.HandleFunc("GET /auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /auth/healthz", s.handleHealthz)
 	// Admin UI for whitelist management. The auth page itself is CORS-free

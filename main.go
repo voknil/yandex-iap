@@ -69,6 +69,18 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	var metricsSrv *http.Server
+	if cfg.MetricsListen != "" {
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", srv.Metrics())
+		metricsSrv = &http.Server{Addr: cfg.MetricsListen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		go func() {
+			if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("metrics server terminated", "err", err)
+			}
+		}()
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- httpSrv.ListenAndServe()
@@ -91,6 +103,9 @@ func main() {
 	defer cancel()
 	if err := httpSrv.Shutdown(ctx); err != nil {
 		log.Error("graceful shutdown failed", "err", err)
+	}
+	if metricsSrv != nil {
+		_ = metricsSrv.Shutdown(ctx)
 	}
 }
 

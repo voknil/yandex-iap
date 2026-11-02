@@ -277,7 +277,7 @@ func TestAdmin_TokenNameCannotInjectMarkupOrScript(t *testing.T) {
 		`</button><img src=x onerror=alert(1)>`,
 	}
 	for _, name := range payloads {
-		if _, _, err := f.toks.Create(name, adminEmail); err != nil {
+		if _, _, err := f.toks.Create(name, adminEmail, 0); err != nil {
 			t.Fatalf("create %q: %v", name, err)
 		}
 	}

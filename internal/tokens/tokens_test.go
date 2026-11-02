@@ -13,7 +13,7 @@ func TestCreateValidateDelete(t *testing.T) {
 	path := filepath.Join(dir, "tokens.json")
 	f := NewFile(path, 0)
 
-	rec, plaintext, err := f.Create("cypress smoke", "admin@example.com")
+	rec, plaintext, err := f.Create("cypress smoke", "admin@example.com", 0)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -64,9 +64,9 @@ func TestListNewestFirst(t *testing.T) {
 	path := filepath.Join(dir, "tokens.json")
 	f := NewFile(path, 0)
 
-	r1, _, _ := f.Create("first", "admin")
+	r1, _, _ := f.Create("first", "admin", 0)
 	time.Sleep(time.Second) // CreatedAt has second precision
-	r2, _, _ := f.Create("second", "admin")
+	r2, _, _ := f.Create("second", "admin", 0)
 
 	list, err := f.List()
 	if err != nil {
@@ -83,7 +83,7 @@ func TestListNewestFirst(t *testing.T) {
 func TestRejectsEmptyName(t *testing.T) {
 	f := NewFile(filepath.Join(t.TempDir(), "t.json"), 0)
 	for _, bad := range []string{"", "   ", "\t\t"} {
-		if _, _, err := f.Create(bad, "admin"); !errors.Is(err, ErrInvalidName) {
+		if _, _, err := f.Create(bad, "admin", 0); !errors.Is(err, ErrInvalidName) {
 			t.Errorf("Create(%q): expected ErrInvalidName, got %v", bad, err)
 		}
 	}
@@ -92,7 +92,7 @@ func TestRejectsEmptyName(t *testing.T) {
 func TestRejectsOverlongName(t *testing.T) {
 	f := NewFile(filepath.Join(t.TempDir(), "t.json"), 0)
 	long := strings.Repeat("x", 81)
-	if _, _, err := f.Create(long, "admin"); !errors.Is(err, ErrInvalidName) {
+	if _, _, err := f.Create(long, "admin", 0); !errors.Is(err, ErrInvalidName) {
 		t.Errorf("Create(81-char): expected ErrInvalidName, got %v", err)
 	}
 }
@@ -101,5 +101,34 @@ func TestValidateMissingFile(t *testing.T) {
 	f := NewFile(filepath.Join(t.TempDir(), "does-not-exist.json"), 0)
 	if _, ok := f.Validate("anything"); ok {
 		t.Errorf("Validate on missing file: expected no match")
+	}
+}
+
+func TestTokenExpiry(t *testing.T) {
+	f := NewFile(filepath.Join(t.TempDir(), "tokens.json"), 0)
+
+	rec, plain, err := f.Create("short", "admin", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ExpiresAt == "" {
+		t.Fatal("a token with a ttl must carry an expiry")
+	}
+	if _, ok := f.Validate(plain); !ok {
+		t.Fatal("a fresh token must validate")
+	}
+	if !rec.Expired(time.Now().Add(2 * time.Hour)) {
+		t.Error("record must report itself expired after its ttl")
+	}
+
+	_, never, _ := f.Create("forever", "admin", 0)
+	if _, ok := f.Validate(never); !ok {
+		t.Error("a token without ttl must validate")
+	}
+	if _, _, err := f.Create("neg", "admin", -time.Second); !errors.Is(err, ErrInvalidTTL) {
+		t.Errorf("negative ttl: got %v", err)
+	}
+	if !(Record{ExpiresAt: "garbage"}).Expired(time.Now()) {
+		t.Error("an unparsable expiry must fail closed")
 	}
 }
