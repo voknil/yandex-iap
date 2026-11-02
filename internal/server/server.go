@@ -67,7 +67,7 @@ func (s *Server) Router() http.Handler {
 	// Root catch-all: redirect to login, so hitting the bare IAP domain does
 	// something useful rather than 404.
 	mux.HandleFunc("GET /", s.handleRootFallback)
-	return mux
+	return securityHeaders(mux)
 }
 
 // handleLogin starts the OAuth flow.
@@ -417,31 +417,7 @@ func isSameSiteOrigin(origin, cookieDomain string) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	dom := strings.TrimPrefix(cookieDomain, ".")
-	host := strings.ToLower(u.Hostname())
-	return host == dom || strings.HasSuffix(host, "."+dom)
-}
-
-// sanitizeRedirect keeps only URLs within the cookie domain to prevent
-// open-redirect abuse ("phishing via trusted IAP hostname").
-func sanitizeRedirect(raw string, cfg *config.Config) string {
-	if raw == "" {
-		return ""
-	}
-	if strings.HasPrefix(raw, "/") && !strings.HasPrefix(raw, "//") {
-		return raw // relative path — always safe
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	// Allow only the cookie domain and its subdomains.
-	dom := strings.TrimPrefix(cfg.CookieDomain, ".")
-	host := strings.ToLower(u.Hostname())
-	if host == dom || strings.HasSuffix(host, "."+dom) {
-		return u.String()
-	}
-	return ""
+	return hostInDomain(u.Hostname(), cookieDomain)
 }
 
 func renderError(w http.ResponseWriter, code int, msg string) {
@@ -453,13 +429,12 @@ func renderError(w http.ResponseWriter, code int, msg string) {
 // renderAccessDenied serves a branded 403 page that explains which email was
 // rejected and offers a "Switch account" button routed through Yandex logout.
 func renderAccessDenied(w http.ResponseWriter, email string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
+	nonce := htmlHeaders(w)
 	w.WriteHeader(http.StatusForbidden)
-	_, _ = w.Write([]byte(accessDeniedHTML(email))) //nolint:gosec // email is HTML-escaped inside accessDeniedHTML
+	_, _ = w.Write([]byte(accessDeniedHTML(email, nonce))) //nolint:gosec // email is HTML-escaped inside accessDeniedHTML
 }
 
-func accessDeniedHTML(email string) string {
+func accessDeniedHTML(email, nonce string) string {
 	// Keep this inline so the binary is still a single static file with no
 	// embedded-filesystem dance. The template uses only html-safe literals
 	// plus a single interpolated email which we html-escape.
@@ -470,7 +445,7 @@ func accessDeniedHTML(email string) string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Access denied</title>
-  <style>
+  <style nonce="` + nonce + `">
     body {
       margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
       background: #f4f4f5; color: #18181b;

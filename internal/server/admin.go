@@ -45,6 +45,14 @@ func (s *Server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 	if admin == "" {
 		return
 	}
+	// The one-time token value is deliberately never read from the URL: it is
+	// only ever rendered in the response to the POST that created it.
+	s.renderAdminPage(w, admin, r.URL.Query().Get("notice"), r.URL.Query().Get("error"), "")
+}
+
+// renderAdminPage writes the admin UI. newToken is the plaintext of a token that
+// was created in this very request, or "" otherwise.
+func (s *Server) renderAdminPage(w http.ResponseWriter, admin, notice, errMsg, newToken string) {
 	csrf, err := session.SignState(s.Cfg.CookieSecret, admin, adminCSRFTTL)
 	if err != nil {
 		s.Log.Error("sign csrf", "err", err)
@@ -62,13 +70,8 @@ func (s *Server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	notice := r.URL.Query().Get("notice")
-	errMsg := r.URL.Query().Get("error")
-	newToken := r.URL.Query().Get("new_token")
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write([]byte(adminPageHTML(admin, csrf, emails, toks, notice, errMsg, newToken))) //nolint:gosec // every dynamic value is passed through htmlEscape
+	nonce := htmlHeaders(w)
+	_, _ = w.Write([]byte(adminPageHTML(admin, csrf, nonce, emails, toks, notice, errMsg, newToken))) //nolint:gosec // every dynamic value is passed through htmlEscape
 }
 
 func (s *Server) handleAdminTokenCreate(w http.ResponseWriter, r *http.Request) {
@@ -100,13 +103,10 @@ func (s *Server) handleAdminTokenCreate(w http.ResponseWriter, r *http.Request) 
 	}
 	s.Log.Info("token create",
 		"admin", admin, "token_id", rec.ID, "name", rec.Name)
-	// Pass the plaintext once, via a URL param; the template shows it prominently
-	// with a "copy" button and instructs the admin that it won't be shown again.
-	host := forwardedHost(r)
-	proto := forwardedProto(r)
-	http.Redirect(w, r, //nolint:gosec // TODO(security PR): relative redirect, token out of the URL
-		proto+"://"+host+"/auth/admin?notice=token+created&new_token="+plaintext,
-		http.StatusSeeOther)
+	// Show the plaintext once, in this response only. It is never put in a URL
+	// (browser history, proxy and access logs would keep it), and the page is
+	// served with Cache-Control: no-store.
+	s.renderAdminPage(w, admin, "token created", "", plaintext)
 }
 
 func (s *Server) handleAdminTokenDelete(w http.ResponseWriter, r *http.Request) {
@@ -133,20 +133,6 @@ func (s *Server) handleAdminTokenDelete(w http.ResponseWriter, r *http.Request) 
 	}
 	s.Log.Info("token delete", "admin", admin, "token_id", id)
 	s.adminRedirect(w, r, "token revoked", "")
-}
-
-func forwardedProto(r *http.Request) string {
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
-		return p
-	}
-	return "https"
-}
-
-func forwardedHost(r *http.Request) string {
-	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
-		return h
-	}
-	return r.Host
 }
 
 func (s *Server) handleAdminAdd(w http.ResponseWriter, r *http.Request) {
@@ -217,16 +203,11 @@ func (s *Server) csrfOK(adminEmail, token string) bool {
 	return embedded == adminEmail
 }
 
+// adminRedirect sends the browser back to the admin page with a flash message.
+// The Location is relative on purpose: it never depends on request headers, so
+// a forged X-Forwarded-Host cannot turn it into an open redirect.
 func (s *Server) adminRedirect(w http.ResponseWriter, r *http.Request, notice, errMsg string) {
-	proto := r.Header.Get("X-Forwarded-Proto")
-	host := r.Header.Get("X-Forwarded-Host")
-	if host == "" {
-		host = r.Host
-	}
-	if proto == "" {
-		proto = "https"
-	}
-	u := proto + "://" + host + "/auth/admin"
+	u := "/auth/admin"
 	sep := "?"
 	if notice != "" {
 		u += sep + "notice=" + escapeQueryValue(notice)
@@ -235,7 +216,7 @@ func (s *Server) adminRedirect(w http.ResponseWriter, r *http.Request, notice, e
 	if errMsg != "" {
 		u += sep + "error=" + escapeQueryValue(errMsg)
 	}
-	http.Redirect(w, r, u, http.StatusSeeOther) //nolint:gosec // TODO(security PR): switch to relative redirect
+	http.Redirect(w, r, u, http.StatusSeeOther) //nolint:gosec // the target always starts with the constant relative path /auth/admin
 }
 
 // escapeQueryValue is a tiny wrapper to keep the redirect URLs readable; we
@@ -257,14 +238,14 @@ func escapeQueryValue(s string) string {
 //	emails:     current whitelist (sorted alphabetically).
 //	toks:       static bearer tokens; nil/empty means tokens are disabled.
 //	newToken:   plaintext value shown exactly once right after creation.
-func adminPageHTML(admin, csrf string, emails []string, toks []tokens.Record, notice, errMsg, newToken string) string {
+func adminPageHTML(admin, csrf, nonce string, emails []string, toks []tokens.Record, notice, errMsg, newToken string) string {
 	return `<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>IAP admin</title>
-  <style>
+  <style nonce="` + nonce + `">
     :root {
       --bg: #f4f4f5; --card: #ffffff; --text: #18181b; --muted: #52525b;
       --border: #e4e4e7; --accent: #18181b; --danger: #dc2626; --ok: #16a34a;
@@ -331,6 +312,14 @@ func adminPageHTML(admin, csrf string, emails []string, toks []tokens.Record, no
 ` + renderTokensCard(csrf, toks) + `
     <p class="footer">yandex-iap · <a href="https://github.com/voknil/yandex-iap">github</a></p>
   </main>
+  <script nonce="` + nonce + `">
+    // Confirmation prompts. The text comes from a data-confirm attribute (HTML-escaped
+    // by the server), never from string-building inside an inline handler.
+    document.addEventListener("submit", function (e) {
+      var b = e.submitter;
+      if (b && b.dataset.confirm && !window.confirm(b.dataset.confirm)) { e.preventDefault(); }
+    });
+  </script>
 </body>
 </html>`
 }
@@ -352,7 +341,7 @@ func renderWhitelistTable(admin, csrf string, emails []string) string {
 		if e == admin {
 			rows.WriteString(`disabled title="нельзя удалить самого себя"`)
 		} else {
-			rows.WriteString(`onclick="return confirm('Удалить ' + this.form.email.value + '?')"`)
+			rows.WriteString(`data-confirm="Удалить ` + htmlEscape(e) + `?"`)
 		}
 		rows.WriteString(`>удалить</button></form></td></tr>`)
 	}
@@ -391,9 +380,7 @@ func renderTokensCard(csrf string, toks []tokens.Record) string {
 			rows.WriteString(`</div></td><td style="text-align:right"><form method="post" action="/auth/admin/tokens/delete" style="display:inline">`)
 			rows.WriteString(`<input type="hidden" name="_csrf" value="` + htmlEscape(csrf) + `">`)
 			rows.WriteString(`<input type="hidden" name="id" value="` + htmlEscape(t.ID) + `">`)
-			rows.WriteString(`<button type="submit" class="btn-remove" onclick="return confirm('Отозвать токен ' + '`)
-			rows.WriteString(htmlEscape(t.Name))
-			rows.WriteString(`' + '? Сервисы, использующие его, перестанут пускаться.')">отозвать</button>`)
+			rows.WriteString(`<button type="submit" class="btn-remove" data-confirm="Отозвать токен ` + htmlEscape(t.Name) + `? Сервисы, использующие его, перестанут пускаться.">отозвать</button>`)
 			rows.WriteString(`</form></td></tr>`)
 		}
 		rows.WriteString(`</tbody></table>`)

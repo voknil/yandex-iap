@@ -15,6 +15,22 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - Dependabot for GitHub Actions, Go modules and the Docker base image.
 - `SECURITY.md`, issue and pull request templates, `Makefile`, `.editorconfig`.
 
+### Security
+- **Fixed an open redirect** in `sanitizeRedirect`: a path such as `/\evil.com` was accepted
+  as "relative", but browsers read the backslash as a slash and treat it as `//evil.com`.
+  Backslashes and control characters are now rejected, only `http(s)` targets are allowed and URLs
+  carrying credentials are refused. Covered by a table test and a fuzz test.
+- **A newly created static token is no longer passed through the URL.** It used to travel in
+  `?new_token=…` (browser history, proxy and access logs). It is now shown only in the response
+  to the creating `POST`, with `Cache-Control: no-store`; the query parameter is ignored.
+- **Fixed script injection through a token name** in the admin UI: the name was placed inside an
+  inline `onclick` handler, where HTML entities are decoded before JavaScript runs. Confirmation
+  prompts now read a `data-confirm` attribute.
+- Admin redirects are relative and no longer built from `X-Forwarded-Host`.
+- Strict `Content-Security-Policy` (per-response nonce, `default-src 'none'`, `frame-ancestors 'none'`)
+  on the admin and "access denied" pages; `X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy` and `Cache-Control: no-store` on every response.
+
 ### Changed
 - Docker image `:latest` now points to the latest **release**; builds from `main`
   are published as `:edge`.
