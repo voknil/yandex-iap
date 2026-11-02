@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ func TestVerifyRejectsTamperedPayload(t *testing.T) {
 	// Flip one character in the payload half.
 	parts := strings.SplitN(tok, ".", 2)
 	tampered := parts[0][:len(parts[0])-1] + "X" + "." + parts[1]
-	if _, err := Verify(testKey, tampered); err != ErrInvalid {
+	if _, err := Verify(testKey, tampered); !errors.Is(err, ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
 	}
 }
@@ -46,14 +47,14 @@ func TestVerifyRejectsTamperedSignature(t *testing.T) {
 	b := []byte(parts[1])
 	b[0] ^= 0x01
 	tampered := parts[0] + "." + string(b)
-	if _, err := Verify(testKey, tampered); err != ErrInvalid {
+	if _, err := Verify(testKey, tampered); !errors.Is(err, ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
 	}
 }
 
 func TestVerifyRejectsExpired(t *testing.T) {
 	tok, _ := Issue(testKey, "user@example.com", "", -time.Second)
-	if _, err := Verify(testKey, tok); err != ErrInvalid {
+	if _, err := Verify(testKey, tok); !errors.Is(err, ErrInvalid) {
 		t.Errorf("expected ErrInvalid for expired token, got %v", err)
 	}
 }
@@ -61,7 +62,7 @@ func TestVerifyRejectsExpired(t *testing.T) {
 func TestVerifyRejectsForeignKey(t *testing.T) {
 	tok, _ := Issue(testKey, "user@example.com", "", time.Minute)
 	other := []byte("00000000000000000000000000000000")
-	if _, err := Verify(other, tok); err != ErrInvalid {
+	if _, err := Verify(other, tok); !errors.Is(err, ErrInvalid) {
 		t.Errorf("expected ErrInvalid with different key, got %v", err)
 	}
 }
@@ -82,7 +83,7 @@ func TestStateRoundTrip(t *testing.T) {
 
 func TestStateRejectsExpired(t *testing.T) {
 	s, _ := SignState(testKey, "/", -time.Second)
-	if _, err := VerifyState(testKey, s); err != ErrInvalid {
+	if _, err := VerifyState(testKey, s); !errors.Is(err, ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
 	}
 }
@@ -93,7 +94,7 @@ func TestStateRejectsTampering(t *testing.T) {
 	b := []byte(parts[1])
 	b[0] ^= 0x01
 	tampered := parts[0] + "." + string(b)
-	if _, err := VerifyState(testKey, tampered); err != ErrInvalid {
+	if _, err := VerifyState(testKey, tampered); !errors.Is(err, ErrInvalid) {
 		t.Errorf("expected ErrInvalid, got %v", err)
 	}
 }

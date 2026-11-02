@@ -40,10 +40,10 @@ type File struct {
 	path         string
 	refreshAfter time.Duration
 
-	mu       sync.RWMutex
-	loaded   time.Time
-	allowed  map[string]struct{}
-	loadErr  error
+	mu      sync.RWMutex
+	loaded  time.Time
+	allowed map[string]struct{}
+	loadErr error
 }
 
 // New returns a File that re-reads path at most every refreshAfter.
@@ -200,7 +200,7 @@ func plausibleEmail(s string) bool {
 // appendLine opens the file for O_APPEND and writes `line + "\n"`. Creates
 // the file (with mode 0644) if it does not yet exist.
 func appendLine(path, line string) error {
-	fh, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	fh, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644) //nolint:gosec // whitelist is not secret; must stay readable by the unprivileged container user
 	if err != nil {
 		return err
 	}
@@ -223,18 +223,18 @@ func rewriteFile(path string, lines []string) error {
 	}()
 	for _, l := range lines {
 		if _, err := fmt.Fprintln(tmp, l); err != nil {
-			tmp.Close()
+			_ = tmp.Close()
 			return err
 		}
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil { //nolint:gosec // whitelist is not secret; world-readable by design
 		return err
 	}
 	return os.Rename(tmp.Name(), path)

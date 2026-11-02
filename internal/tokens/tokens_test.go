@@ -1,6 +1,7 @@
 package tokens
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -82,7 +83,7 @@ func TestListNewestFirst(t *testing.T) {
 func TestRejectsEmptyName(t *testing.T) {
 	f := NewFile(filepath.Join(t.TempDir(), "t.json"), 0)
 	for _, bad := range []string{"", "   ", "\t\t"} {
-		if _, _, err := f.Create(bad, "admin"); err != ErrInvalidName {
+		if _, _, err := f.Create(bad, "admin"); !errors.Is(err, ErrInvalidName) {
 			t.Errorf("Create(%q): expected ErrInvalidName, got %v", bad, err)
 		}
 	}
@@ -91,7 +92,7 @@ func TestRejectsEmptyName(t *testing.T) {
 func TestRejectsOverlongName(t *testing.T) {
 	f := NewFile(filepath.Join(t.TempDir(), "t.json"), 0)
 	long := strings.Repeat("x", 81)
-	if _, _, err := f.Create(long, "admin"); err != ErrInvalidName {
+	if _, _, err := f.Create(long, "admin"); !errors.Is(err, ErrInvalidName) {
 		t.Errorf("Create(81-char): expected ErrInvalidName, got %v", err)
 	}
 }

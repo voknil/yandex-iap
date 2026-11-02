@@ -68,7 +68,7 @@ func (s *Server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write([]byte(adminPageHTML(admin, csrf, emails, toks, notice, errMsg, newToken)))
+	_, _ = w.Write([]byte(adminPageHTML(admin, csrf, emails, toks, notice, errMsg, newToken))) //nolint:gosec // every dynamic value is passed through htmlEscape
 }
 
 func (s *Server) handleAdminTokenCreate(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +104,7 @@ func (s *Server) handleAdminTokenCreate(w http.ResponseWriter, r *http.Request) 
 	// with a "copy" button and instructs the admin that it won't be shown again.
 	host := forwardedHost(r)
 	proto := forwardedProto(r)
-	http.Redirect(w, r,
+	http.Redirect(w, r, //nolint:gosec // TODO(security PR): relative redirect, token out of the URL
 		proto+"://"+host+"/auth/admin?notice=token+created&new_token="+plaintext,
 		http.StatusSeeOther)
 }
@@ -235,7 +235,7 @@ func (s *Server) adminRedirect(w http.ResponseWriter, r *http.Request, notice, e
 	if errMsg != "" {
 		u += sep + "error=" + escapeQueryValue(errMsg)
 	}
-	http.Redirect(w, r, u, http.StatusSeeOther)
+	http.Redirect(w, r, u, http.StatusSeeOther) //nolint:gosec // TODO(security PR): switch to relative redirect
 }
 
 // escapeQueryValue is a tiny wrapper to keep the redirect URLs readable; we

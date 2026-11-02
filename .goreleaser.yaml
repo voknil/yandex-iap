@@ -1,0 +1,69 @@
+version: 2
+
+project_name: yandex-iap
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: yandex-iap
+    main: .
+    binary: yandex-iap
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Security
+      regexp: '^.*?(security|sec)(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Other
+      order: 99
+  filters:
+    exclude:
+      - '^docs?:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+
+release:
+  github:
+    owner: voknil
+    name: yandex-iap
+  footer: |
+    ## Container image
+
+    ```
+    docker pull ghcr.io/voknil/yandex-iap:{{ .Version }}
+    ```
+
+    Multi-arch (linux/amd64, linux/arm64), distroless, non-root, with SBOM and build provenance.

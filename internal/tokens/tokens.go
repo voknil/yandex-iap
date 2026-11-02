@@ -81,10 +81,10 @@ type File struct {
 	path         string
 	refreshAfter time.Duration
 
-	mu       sync.RWMutex
-	loaded   time.Time
-	records  []Record
-	byHash   map[string]int // hash -> index in records
+	mu      sync.RWMutex
+	loaded  time.Time
+	records []Record
+	byHash  map[string]int // hash -> index in records
 }
 
 // NewFile returns a file-backed Store. refreshAfter=0 means "reload on every
@@ -258,11 +258,11 @@ func (f *File) persistLocked() error {
 	enc := json.NewEncoder(tmp)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(f.records); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {

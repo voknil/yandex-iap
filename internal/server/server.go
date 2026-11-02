@@ -85,7 +85,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	url := s.OAuth.AuthorizeURL(state, s.Cfg.ScopesJoined())
-	http.Redirect(w, r, url, http.StatusFound)
+	http.Redirect(w, r, url, http.StatusFound) //nolint:gosec // target is the fixed Yandex authorize endpoint
 }
 
 // handleCallback consumes the Yandex callback: exchanges the code, fetches
@@ -145,7 +145,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if redirect == "" {
 		redirect = s.Cfg.LoginRedirectDefault
 	}
-	http.Redirect(w, r, redirect, http.StatusFound)
+	http.Redirect(w, r, redirect, http.StatusFound) //nolint:gosec // redirect comes from the HMAC-signed state and was passed through sanitizeRedirect at /auth/login
 }
 
 // handleVerify is the forward-auth endpoint. Traefik/nginx invoke it for every
@@ -298,7 +298,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, rd, http.StatusFound)
+	http.Redirect(w, r, rd, http.StatusFound) //nolint:gosec // rd was passed through sanitizeRedirect
 }
 
 // handleHealthz reports liveness and the whitelist load status.
@@ -365,7 +365,7 @@ func rebuildOriginalURL(r *http.Request) string {
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, value string) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure+HttpOnly are set; SameSite is operator-configurable by design
 		Name:     s.Cfg.CookieName,
 		Value:    value,
 		Path:     "/",
@@ -378,7 +378,7 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, value string) {
 }
 
 func (s *Server) clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // see setSessionCookie
 		Name:     s.Cfg.CookieName,
 		Value:    "",
 		Path:     "/",
@@ -447,7 +447,7 @@ func sanitizeRedirect(raw string, cfg *config.Config) string {
 func renderError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(code)
-	_, _ = w.Write([]byte(msg + "\n"))
+	_, _ = w.Write([]byte(msg + "\n")) //nolint:gosec // served as text/plain, never interpreted as HTML
 }
 
 // renderAccessDenied serves a branded 403 page that explains which email was
@@ -456,7 +456,7 @@ func renderAccessDenied(w http.ResponseWriter, email string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusForbidden)
-	_, _ = w.Write([]byte(accessDeniedHTML(email)))
+	_, _ = w.Write([]byte(accessDeniedHTML(email))) //nolint:gosec // email is HTML-escaped inside accessDeniedHTML
 }
 
 func accessDeniedHTML(email string) string {
