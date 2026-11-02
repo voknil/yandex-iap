@@ -24,4 +24,6 @@ COPY --from=build /out/yandex-iap /yandex-iap
 
 EXPOSE 9090
 USER nonroot:nonroot
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["/yandex-iap", "-healthcheck"]
 ENTRYPOINT ["/yandex-iap"]

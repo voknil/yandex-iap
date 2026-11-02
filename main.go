@@ -8,7 +8,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +25,19 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-version", "--version", "version":
+			fmt.Println("yandex-iap", version)
+			return
+		case "-healthcheck", "--healthcheck", "healthcheck":
+			os.Exit(healthcheck())
+		default:
+			fmt.Fprintf(os.Stderr, "usage: yandex-iap [-version | -healthcheck]\n")
+			os.Exit(2)
+		}
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("config", "err", err)
@@ -97,4 +112,40 @@ func skipAuthDesc(cfg *config.Config) string {
 		return ""
 	}
 	return cfg.SkipAuthRegex.String()
+}
+
+// healthcheck probes the local /auth/healthz and returns a process exit code.
+// It exists for container HEALTHCHECKs: the distroless image has no shell or curl.
+func healthcheck() int {
+	addr := os.Getenv("LISTEN")
+	if addr == "" {
+		addr = ":9090"
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "healthcheck: bad LISTEN:", err)
+		return 1
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, //nolint:gosec // loopback probe of our own LISTEN address
+		"http://"+net.JoinHostPort(host, port)+"/auth/healthz", nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "healthcheck:", err)
+		return 1
+	}
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // see above
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "healthcheck:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "healthcheck: status", resp.StatusCode)
+		return 1
+	}
+	return 0
 }

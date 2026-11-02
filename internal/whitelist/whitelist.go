@@ -33,7 +33,8 @@ type Store interface {
 var ErrInvalidEmail = errors.New("invalid email")
 
 // File reads a newline-delimited file of lowercase emails.
-// Lines starting with "#" and blank lines are ignored.
+// Lines starting with "#" and blank lines are ignored. A line of the form
+// "*@example.com" (or "@example.com") allows every address in that domain.
 // The file is re-read every refreshAfter to pick up edits (e.g. via sed or Ansible);
 // lookups never block on disk I/O outside the refresh window.
 type File struct {
@@ -63,8 +64,15 @@ func (f *File) Allowed(email string) bool {
 
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	_, ok := f.allowed[email]
-	return ok
+	if _, ok := f.allowed[email]; ok {
+		return true
+	}
+	// A "*@example.com" entry admits every address of that domain.
+	if at := strings.IndexByte(email, '@'); at > 0 && strings.Count(email, "@") == 1 {
+		_, ok := f.allowed["*"+email[at:]]
+		return ok
+	}
+	return false
 }
 
 // LastError returns the most recent load error, or nil if the last load
@@ -102,8 +110,8 @@ func (f *File) List() []string {
 // The operation is idempotent: adding an existing email is a no-op.
 // The argument is lowercased and whitespace-trimmed before validation.
 func (f *File) Add(email string) error {
-	email = strings.ToLower(strings.TrimSpace(email))
-	if !plausibleEmail(email) {
+	email = normalizeEntry(email)
+	if !plausibleEntry(email) {
 		return ErrInvalidEmail
 	}
 
@@ -137,7 +145,7 @@ func (f *File) Add(email string) error {
 // is not an error. The on-disk file is rewritten atomically (write-tmp +
 // rename) so readers never see a partial state.
 func (f *File) Remove(email string) error {
-	email = strings.ToLower(strings.TrimSpace(email))
+	email = normalizeEntry(email)
 	if email == "" {
 		return ErrInvalidEmail
 	}
@@ -169,6 +177,24 @@ func (f *File) Remove(email string) error {
 	delete(f.allowed, email)
 	f.loaded = time.Now()
 	return nil
+}
+
+// normalizeEntry lowercases and trims an entry and spells a bare "@domain"
+// as the canonical "*@domain".
+func normalizeEntry(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if strings.HasPrefix(s, "@") {
+		s = "*" + s
+	}
+	return s
+}
+
+// plausibleEntry accepts an address or a "*@domain" wildcard.
+func plausibleEntry(s string) bool {
+	if rest, ok := strings.CutPrefix(s, "*@"); ok {
+		return plausibleEmail("x@" + rest)
+	}
+	return plausibleEmail(s)
 }
 
 // plausibleEmail is a deliberately-lenient check: must contain exactly one
@@ -279,7 +305,7 @@ func parseFile(path string) (map[string]struct{}, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		out[strings.ToLower(line)] = struct{}{}
+		out[normalizeEntry(line)] = struct{}{}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err

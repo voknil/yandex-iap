@@ -39,6 +39,9 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - **Rate limiting** of `/auth/login` and `/auth/callback` per client (`RATE_LIMIT`, default 60/min,
   `0` disables; `TRUST_FORWARDED_FOR` keys it on the proxy-supplied address).
 
+- `*@example.com` (or `@example.com`) whitelist entries admit a whole domain.
+- `yandex-iap -version` and `yandex-iap -healthcheck`; the Docker image now has a `HEALTHCHECK`.
+
 ### Changed
 - Yandex endpoints are configurable on the client (used by tests against a fake server).
 - Test coverage raised across `config`, `yandex`, `session` and the full login flow.
