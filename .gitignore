@@ -22,3 +22,8 @@ dist/
 *_rsa
 *_ed25519
 !*.pub
+
+# build artefacts
+dist/
+bin/
+cover.out
