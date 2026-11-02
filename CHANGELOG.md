@@ -13,6 +13,8 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 - Release automation: tagged versions publish binaries (linux, macOS, Windows;
   amd64, arm64), checksums and generated release notes.
 - Dependabot for GitHub Actions, Go modules and the Docker base image.
+- Documentation: restructured README, `docs/architecture.md` (login sequence diagram, design decisions),
+  `docs/security.md` (threat model), `CONTRIBUTING.md`.
 - `SECURITY.md`, issue and pull request templates, `Makefile`, `.editorconfig`.
 
 ### Security

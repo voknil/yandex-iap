@@ -35,14 +35,16 @@ On failure, the user is redirected to `/auth/login`, which starts an OAuth dance
 
 ## Features
 
-- **Single binary, ~8 MB image** (distroless-static base, `nonroot` user).
-- **Stateless** — session cookies are signed with HMAC-SHA256; no Redis/DB.
-- **Whitelist hot-reload** — edit `allowed-emails.txt`, changes are picked up within seconds, no restart.
-- **Built-in admin UI** at `/auth/admin` — manage the whitelist and static tokens in the browser (gated by `ADMIN_EMAILS`).
-- **Static bearer tokens** for CI jobs / smoke tests / automation that can't do an interactive OAuth dance. Generated in the UI, stored as SHA-256 hashes, validated in constant time, revocable.
-- **Skip-auth regex** for health endpoints (`/healthz`, `/api/health` …).
-- **Open-redirect safe** — post-login redirects are constrained to the cookie domain.
-- **Multi-arch image** (`linux/amd64`, `linux/arm64`) published to GHCR.
+- **Single static binary, zero third-party dependencies** — distroless, `nonroot` image for `linux/amd64` and `linux/arm64`, published to GHCR with an SBOM and build provenance.
+- **Stateless sessions** — cookies are HMAC-SHA256 signed; no Redis, no database. Secret rotation without logging users out (`COOKIE_SECRET_PREVIOUS`).
+- **Whitelist hot-reload** — exact addresses or whole domains (`*@example.com`); edits apply within seconds, no restart. Removing an address revokes live sessions at the next request.
+- **Admin UI** at `/auth/admin` — manage the whitelist and static tokens in the browser (gated by `ADMIN_EMAILS`), served under a strict CSP.
+- **Static bearer tokens** for CI and automation — shown once, stored as SHA-256 hashes, validated in constant time, optional expiry, instantly revocable.
+- **Hardened login flow** — state bound to the browser (login CSRF), validated post-login redirects, per-client rate limiting, security headers on every response.
+- **Operable** — structured JSON logs, `/auth/healthz`, `-healthcheck` for container probes, optional Prometheus metrics on a separate port.
+- **Tested** — table, fuzz and end-to-end tests against a fake Yandex; CI runs lint, `-race` tests, `govulncheck` and a multi-arch image build.
+
+Design notes live in [docs/architecture.md](docs/architecture.md); the threat model is in [docs/security.md](docs/security.md).
 
 ## Quick start
 
@@ -72,9 +74,11 @@ docker run --rm -p 9090:9090 \
 
 `allowed-emails.txt`:
 ```
-# one email per line; comments and blank lines are ignored
+# one entry per line; comments and blank lines are ignored
 alice@yandex.ru
 bob@example.com
+# everyone at a domain
+*@example.org
 ```
 
 ### 3. Wire it into your reverse proxy
@@ -195,7 +199,7 @@ All knobs are environment variables.
 | `YANDEX_CLIENT_SECRET` | Client secret (pair with the ID) |
 | `CALLBACK_URL` | Full HTTPS URL; must match a Redirect URI registered in the Yandex app (e.g. `https://app.example.com/auth/callback`) |
 | `COOKIE_DOMAIN` | Cookie domain (e.g. `.example.com` to share across subdomains, or `app.example.com` to restrict) |
-| `COOKIE_SECRET` | Random string ≥ 32 chars (`openssl rand -base64 32`). **Rotate to invalidate all sessions.** |
+| `COOKIE_SECRET` | Random string ≥ 32 chars (`openssl rand -base64 32`). Changing it invalidates all sessions unless the old value is moved to `COOKIE_SECRET_PREVIOUS`. |
 | `WHITELIST_FILE` | Path to the newline-delimited allow-list inside the container |
 | `ADMIN_EMAILS` | Comma-separated list of admins allowed to open `/auth/admin`. Other whitelist users see 403 on that path. |
 
@@ -209,6 +213,10 @@ All knobs are environment variables.
 | `COOKIE_SAMESITE` | `lax` | `SameSite` attribute of the session cookie: `lax`, `none`, or `strict`. Use `none` for multi-subdomain deployments where the browser makes credentialed cross-origin fetches between sibling subdomains — the cookie is always marked `Secure`, so `None` is safe. |
 | `SKIP_AUTH_REGEX` | *(empty)* | Regex against `X-Forwarded-Uri`; matches bypass authentication. E.g. `^/(healthz|api/health)$` |
 | `LOGIN_REDIRECT_DEFAULT` | `/` | Fallback redirect when `rd` is missing or invalid |
+| `COOKIE_SECRET_PREVIOUS` | *(empty)* | Comma-separated older secrets (≥ 32 chars each) still accepted for **verification**, so `COOKIE_SECRET` can be rotated without logging everyone out. Remove them after `COOKIE_TTL` has passed. |
+| `RATE_LIMIT` | `60` | Login/callback requests per minute per client; `0` disables |
+| `TRUST_FORWARDED_FOR` | `false` | Key the rate limit on the last `X-Forwarded-For` entry (set this behind a reverse proxy, otherwise every client looks like the proxy) |
+| `METRICS_LISTEN` | *(empty)* | Address for Prometheus metrics, e.g. `127.0.0.1:9091`. Empty disables them. Served on its own port, never on `LISTEN`. |
 | `TOKENS_FILE` | *(empty)* | Path to a JSON file for static bearer tokens. Empty disables tokens entirely (no Bearer probing in `/verify`, no card in `/admin`). |
 | `LISTEN` | `:9090` | TCP bind address |
 | `LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
@@ -249,6 +257,7 @@ need to create `/etc/iap/.iap-tokens-XXXX` as UID 65532 and get `permission deni
 | `GET /auth/verify` | Forward-auth endpoint. `200` + identity headers = allow, `302 /auth/login` = deny for humans, `401` for bad bearer tokens. |
 | `GET /auth/logout?rd=<url>&switch=1` | Clear the session cookie. `switch=1` also routes through Yandex Passport logout so the next login can pick a different account. |
 | `GET /auth/healthz` | JSON liveness + whitelist size. Always public. |
+| `GET /metrics` *(on `METRICS_LISTEN` only)* | Prometheus counters. |
 | `GET /auth/admin` | Admin UI — whitelist table + static-tokens table. Requires a cookie from an `ADMIN_EMAILS` user. |
 | `POST /auth/admin/{add,remove}` | Whitelist mutations. CSRF-protected. |
 | `POST /auth/admin/tokens/{create,delete}` | Static-token mutations. CSRF-protected. |
@@ -259,7 +268,7 @@ For CI jobs, smoke-test scripts and any automation that can't complete an intera
 OAuth flow, admins can mint long-lived bearer tokens at `/auth/admin`.
 
 ```bash
-# In the UI: name the token ("cypress smoke tests"), click "Создать". The
+# In the UI: name the token ("cypress smoke tests"), pick a lifetime, click "Создать". The
 # plaintext value (yiap_<40 hex>) is displayed ONCE — save it immediately.
 
 # Use it from any client:
@@ -276,26 +285,34 @@ Properties:
 - Persisted as SHA-256 hash + last-4 fingerprint only — a leaked file does not expose active credentials
 - Constant-time comparison on validate
 - Invalid tokens return `401` (not `302` to a login page) — curl/Postman-friendly
+- Optional expiry (7 days to 1 year, or never); an expired token stops working without any cleanup
 - Revoke instantly from the UI; any in-flight request using the old token gets 401
 - Forwarded through `X-Forwarded-Authorization` as well as `Authorization`, so reverse proxies that mangle the original header can re-inject it
 
 ## Security notes
 
-- **Cookies are set with `Secure`, `HttpOnly`, `SameSite=Lax`**, so HTTPS is mandatory in production.
-- **`COOKIE_SECRET` is never stored** other than in env vars / secret managers; treat it like a TLS private key.
-- **Open redirects**: `rd` parameters are validated against `COOKIE_DOMAIN` — cross-domain redirects are silently dropped.
-- **Whitelist file** is read at startup and re-checked every ~5s; **changes do not require a restart**.
-- **Revoking a session**: remove the email from the whitelist. Existing cookies still pass signature check but are denied at `verify`.
-- `yandex-iap` does **not** implement OIDC `PKCE` or nonce because Yandex doesn't issue `id_token`s. CSRF protection on the callback comes from the signed `state` parameter.
+The full threat model is in [docs/security.md](docs/security.md). In short:
 
-## Building
+- Cookies are `Secure`, `HttpOnly` and signed; HTTPS is mandatory in production.
+- The OAuth `state` is signed, short-lived and bound to the browser that started the login, so a callback URL cannot be replayed into another browser.
+- `rd` redirect targets are limited to the cookie domain; backslashes, control characters, credentials in the URL and non-http(s) schemes are refused (covered by a fuzz test).
+- The admin and error pages are served with a nonce-based `Content-Security-Policy`; every response carries `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
+- Admin forms are CSRF-protected; a newly created token is shown only in the response to the creating `POST`, never in a URL.
+- Revoke a user by removing them from the whitelist: their cookie still verifies, but is denied at the next request.
+- `yandex-iap` does not use PKCE or an OIDC nonce because Yandex does not issue `id_token`s.
+
+Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
+
+## Development
 
 ```bash
-go test ./...
-go build -o yandex-iap .
+make check      # vet + golangci-lint + tests with the race detector
+make cover      # coverage summary
+make build      # static binary in ./bin
+go test -fuzz=FuzzSanitizeRedirect -fuzztime=30s ./internal/server
 ```
 
-Docker image is built via the CI workflow and published to `ghcr.io/voknil/yandex-iap:<tag>`.
+Go 1.22 or newer. Tagged releases publish binaries (Linux, macOS, Windows) and the container image; see the [changelog](CHANGELOG.md).
 
 ## FAQ
 
@@ -307,11 +324,7 @@ Docker image is built via the CI workflow and published to `ghcr.io/voknil/yande
 
 ## Contributing
 
-PRs welcome, especially:
-
-- additional reverse-proxy integration recipes (HAProxy, Envoy, Istio)
-- more whitelist backends (HTTP, LDAP, OIDC groups)
-- tests for `internal/server` and `internal/yandex` against httptest fixtures
+PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Ideas that would be especially useful: more reverse-proxy recipes (HAProxy, Envoy), alternative whitelist backends, and group-based access.
 
 ## License
 
