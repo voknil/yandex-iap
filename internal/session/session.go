@@ -50,10 +50,16 @@ func Issue(key []byte, email, name string, ttl time.Duration) (string, error) {
 	return encode(key, p)
 }
 
-// Verify parses and validates a token. It returns the embedded payload on
-// success; the error is ErrInvalid for any parse/signature/expiry failure so
-// callers can treat it uniformly.
+// Verify parses and validates a token against a single key. See VerifyAny.
 func Verify(key []byte, token string) (*Payload, error) {
+	return VerifyAny([][]byte{key}, token)
+}
+
+// VerifyAny parses and validates a token against a set of keys: the current
+// key first, then any previous ones still accepted during a secret rotation.
+// It returns the embedded payload on success; the error is ErrInvalid for any
+// parse/signature/expiry failure so callers can treat it uniformly.
+func VerifyAny(keys [][]byte, token string) (*Payload, error) {
 	payloadB64, sigB64, ok := splitOnce(token, '.')
 	if !ok {
 		return nil, ErrInvalid
@@ -66,8 +72,7 @@ func Verify(key []byte, token string) (*Payload, error) {
 	if err != nil {
 		return nil, ErrInvalid
 	}
-	want := mac(key, payloadJSON)
-	if !hmac.Equal(got, want) {
+	if !macOK(keys, payloadJSON, got) {
 		return nil, ErrInvalid
 	}
 	var p Payload
@@ -83,13 +88,22 @@ func Verify(key []byte, token string) (*Payload, error) {
 	return &p, nil
 }
 
-// SignState mints a short-lived, signed OAuth state parameter carrying the
-// post-login redirect URL. It uses the same HMAC key as sessions — convenient
-// for ops, and the state is never a long-lived credential.
+// SignState mints a short-lived, signed token carrying a string (the post-login
+// redirect for OAuth state, or the admin's email for a CSRF token). It uses the
+// same HMAC key as sessions; the value is never a long-lived credential.
 func SignState(key []byte, redirect string, ttl time.Duration) (string, error) {
+	return SignLoginState(key, redirect, "", ttl)
+}
+
+// SignLoginState is SignState plus a nonce. The caller also stores the nonce in
+// a cookie on the browser that started the login and checks that the two match
+// when Yandex redirects back, so a state minted for one browser cannot be used
+// to complete a login in another (login CSRF).
+func SignLoginState(key []byte, redirect, nonce string, ttl time.Duration) (string, error) {
 	now := time.Now().UTC()
 	p := statePayload{
 		Redirect:  redirect,
+		Nonce:     nonce,
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(ttl).Unix(),
 	}
@@ -102,36 +116,48 @@ func SignState(key []byte, redirect string, ttl time.Duration) (string, error) {
 		base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
-// VerifyState returns the redirect encoded in a previously-minted state, or
+// VerifyState returns the string encoded in a previously-minted state, or
 // ErrInvalid if it's forged or expired.
 func VerifyState(key []byte, state string) (string, error) {
+	return VerifyStateAny([][]byte{key}, state)
+}
+
+// VerifyStateAny is VerifyState against a set of keys (see VerifyAny).
+func VerifyStateAny(keys [][]byte, state string) (string, error) {
+	redirect, _, err := VerifyLoginState(keys, state)
+	return redirect, err
+}
+
+// VerifyLoginState returns the redirect and the nonce encoded in a state.
+func VerifyLoginState(keys [][]byte, state string) (redirect, nonce string, err error) {
 	payloadB64, sigB64, ok := splitOnce(state, '.')
 	if !ok {
-		return "", ErrInvalid
+		return "", "", ErrInvalid
 	}
 	payloadJSON, err := base64.RawURLEncoding.DecodeString(payloadB64)
 	if err != nil {
-		return "", ErrInvalid
+		return "", "", ErrInvalid
 	}
 	got, err := base64.RawURLEncoding.DecodeString(sigB64)
 	if err != nil {
-		return "", ErrInvalid
+		return "", "", ErrInvalid
 	}
-	if !hmac.Equal(got, mac(key, payloadJSON)) {
-		return "", ErrInvalid
+	if !macOK(keys, payloadJSON, got) {
+		return "", "", ErrInvalid
 	}
 	var p statePayload
 	if err := json.Unmarshal(payloadJSON, &p); err != nil {
-		return "", ErrInvalid
+		return "", "", ErrInvalid
 	}
 	if time.Now().UTC().Unix() >= p.ExpiresAt {
-		return "", ErrInvalid
+		return "", "", ErrInvalid
 	}
-	return p.Redirect, nil
+	return p.Redirect, p.Nonce, nil
 }
 
 type statePayload struct {
 	Redirect  string `json:"rd"`
+	Nonce     string `json:"n,omitempty"`
 	IssuedAt  int64  `json:"iat"`
 	ExpiresAt int64  `json:"exp"`
 }
@@ -144,6 +170,18 @@ func encode(key []byte, p Payload) (string, error) {
 	sig := mac(key, b)
 	return base64.RawURLEncoding.EncodeToString(b) + "." +
 		base64.RawURLEncoding.EncodeToString(sig), nil
+}
+
+// macOK reports whether got is a valid signature of data under any of the keys.
+// It always checks every key, so the time taken does not reveal which one matched.
+func macOK(keys [][]byte, data, got []byte) bool {
+	ok := false
+	for _, k := range keys {
+		if hmac.Equal(got, mac(k, data)) {
+			ok = true
+		}
+	}
+	return ok
 }
 
 func mac(key, data []byte) []byte {

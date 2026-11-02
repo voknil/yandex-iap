@@ -18,10 +18,12 @@ import (
 	"time"
 )
 
+// Production endpoints. They are fields on Client so tests can point it at a
+// fake server.
 const (
-	authEndpoint     = "https://oauth.yandex.ru/authorize"
-	tokenEndpoint    = "https://oauth.yandex.ru/token" //nolint:gosec // public OAuth endpoint URL, not a credential
-	userInfoEndpoint = "https://login.yandex.ru/info?format=json"
+	DefaultAuthEndpoint     = "https://oauth.yandex.ru/authorize"
+	DefaultTokenEndpoint    = "https://oauth.yandex.ru/token" //nolint:gosec // public OAuth endpoint URL, not a credential
+	DefaultUserInfoEndpoint = "https://login.yandex.ru/info?format=json"
 )
 
 // Client performs OAuth calls against Yandex.
@@ -30,6 +32,10 @@ type Client struct {
 	ClientSecret string
 	RedirectURI  string
 	HTTP         *http.Client
+
+	AuthEndpoint     string
+	TokenEndpoint    string
+	UserInfoEndpoint string
 }
 
 // New returns a Client with a 10-second HTTP timeout.
@@ -39,6 +45,10 @@ func New(clientID, clientSecret, redirectURI string) *Client {
 		ClientSecret: clientSecret,
 		RedirectURI:  redirectURI,
 		HTTP:         &http.Client{Timeout: 10 * time.Second},
+
+		AuthEndpoint:     DefaultAuthEndpoint,
+		TokenEndpoint:    DefaultTokenEndpoint,
+		UserInfoEndpoint: DefaultUserInfoEndpoint,
 	}
 }
 
@@ -53,7 +63,7 @@ func (c *Client) AuthorizeURL(state, scopes string) string {
 		q.Set("scope", scopes)
 	}
 	// force_confirm=yes не требуется — Yandex сам кеширует согласие на клиенте.
-	return authEndpoint + "?" + q.Encode()
+	return c.AuthEndpoint + "?" + q.Encode()
 }
 
 // TokenResponse is the subset of the token endpoint we care about.
@@ -73,7 +83,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string) (*TokenResponse,
 	form.Set("client_id", c.ClientID)
 	form.Set("client_secret", c.ClientSecret)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint,
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenEndpoint,
 		strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
@@ -146,7 +156,7 @@ func (u *UserInfo) Name() string {
 // FetchUserInfo calls login.yandex.ru/info with the access token.
 // The token is sent as "OAuth <token>" per Yandex convention (not "Bearer").
 func (c *Client) FetchUserInfo(ctx context.Context, accessToken string) (*UserInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, userInfoEndpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.UserInfoEndpoint, nil)
 	if err != nil {
 		return nil, err
 	}

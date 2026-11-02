@@ -31,7 +31,17 @@ the project adheres to [Semantic Versioning](https://semver.org/).
   on the admin and "access denied" pages; `X-Content-Type-Options`, `X-Frame-Options`,
   `Referrer-Policy` and `Cache-Control: no-store` on every response.
 
+- **Login CSRF protection.** The OAuth `state` now carries a random nonce that is also stored in a
+  short-lived `HttpOnly` cookie on the browser that started the login; the callback rejects a
+  state that comes back without the matching cookie.
+- **Cookie secret rotation.** `COOKIE_SECRET_PREVIOUS` (comma-separated) lists old secrets that are
+  still accepted for verification, so the secret can be changed without logging everyone out.
+- **Rate limiting** of `/auth/login` and `/auth/callback` per client (`RATE_LIMIT`, default 60/min,
+  `0` disables; `TRUST_FORWARDED_FOR` keys it on the proxy-supplied address).
+
 ### Changed
+- Yandex endpoints are configurable on the client (used by tests against a fake server).
+- Test coverage raised across `config`, `yandex`, `session` and the full login flow.
 - Docker image `:latest` now points to the latest **release**; builds from `main`
   are published as `:edge`.
 - Build image bumped to Go 1.24.
