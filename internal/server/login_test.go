@@ -248,3 +248,27 @@ func TestRateLimiterWindowAndKey(t *testing.T) {
 type denyAll struct{ fakeWhitelist }
 
 func (denyAll) Allowed(string) bool { return false }
+
+func TestMetricsCountResponses(t *testing.T) {
+	f := newLoginFixture(t, "ok@example.com")
+	f.srv.metrics = newMetrics()
+	h := f.srv.Router()
+
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/auth/verify", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/auth/login", nil))
+
+	rec := httptest.NewRecorder()
+	f.srv.Metrics().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		`yiap_requests_total{endpoint="verify",code="302"} 1`,
+		`yiap_requests_total{endpoint="login",code="302"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics output lacks %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "@") {
+		t.Error("metrics must not contain identities")
+	}
+}

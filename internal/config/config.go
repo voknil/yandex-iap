@@ -84,6 +84,10 @@ type Config struct {
 	// Listen is the TCP address the HTTP server binds to, e.g. ":9090".
 	Listen string
 
+	// MetricsListen, when set (e.g. "127.0.0.1:9091"), serves Prometheus
+	// counters on a separate listener so they never share the public port.
+	MetricsListen string
+
 	// LogLevel controls verbosity: "debug", "info", "warn", "error".
 	LogLevel string
 }
@@ -107,6 +111,7 @@ type Config struct {
 //	SKIP_AUTH_REGEX     (default empty — no bypass)
 //	LOGIN_REDIRECT_DEFAULT (default "/")
 //	LISTEN              (default ":9090")
+//	METRICS_LISTEN      (default empty — metrics off; e.g. "127.0.0.1:9091")
 //	LOG_LEVEL           (default "info")
 func Load() (*Config, error) {
 	cfg := &Config{
@@ -229,6 +234,7 @@ func Load() (*Config, error) {
 	if v := os.Getenv("LISTEN"); v != "" {
 		cfg.Listen = v
 	}
+	cfg.MetricsListen = strings.TrimSpace(os.Getenv("METRICS_LISTEN"))
 	if v := os.Getenv("LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
 	}

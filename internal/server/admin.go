@@ -92,7 +92,7 @@ func (s *Server) handleAdminTokenCreate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	name := strings.TrimSpace(r.PostFormValue("name"))
-	rec, plaintext, err := s.Tokens.Create(name, admin)
+	rec, plaintext, err := s.Tokens.Create(name, admin, tokenTTL(r.PostFormValue("ttl")))
 	if err != nil {
 		msg := "could not create: " + err.Error()
 		if errors.Is(err, tokens.ErrInvalidName) {
@@ -107,6 +107,25 @@ func (s *Server) handleAdminTokenCreate(w http.ResponseWriter, r *http.Request) 
 	// (browser history, proxy and access logs would keep it), and the page is
 	// served with Cache-Control: no-store.
 	s.renderAdminPage(w, admin, "token created", "", plaintext)
+}
+
+// tokenTTL maps the lifetime chosen in the admin form to a duration. Unknown
+// values mean "never expires" only for the explicit "never" option; anything
+// else falls back to the shortest listed lifetime, so a forged value cannot
+// produce a longer-lived token than the UI offers.
+func tokenTTL(v string) time.Duration {
+	switch v {
+	case "never":
+		return 0
+	case "30d":
+		return 30 * 24 * time.Hour
+	case "90d":
+		return 90 * 24 * time.Hour
+	case "365d":
+		return 365 * 24 * time.Hour
+	default:
+		return 7 * 24 * time.Hour
+	}
 }
 
 func (s *Server) handleAdminTokenDelete(w http.ResponseWriter, r *http.Request) {
@@ -360,6 +379,7 @@ func renderTokensCard(csrf string, toks []tokens.Record) string {
 	rows.WriteString(`<form class="add" method="post" action="/auth/admin/tokens/create">`)
 	rows.WriteString(`<input type="hidden" name="_csrf" value="` + htmlEscape(csrf) + `">`)
 	rows.WriteString(`<input type="text" name="name" placeholder="cypress smoke tests" required maxlength="80">`)
+	rows.WriteString(`<select name="ttl" aria-label="срок жизни"><option value="7d">7 дней</option><option value="30d" selected>30 дней</option><option value="90d">90 дней</option><option value="365d">1 год</option><option value="never">бессрочно</option></select>`)
 	rows.WriteString(`<button type="submit">Создать токен</button>`)
 	rows.WriteString(`</form>`)
 	if len(toks) == 0 {
@@ -373,6 +393,14 @@ func renderTokensCard(csrf string, toks []tokens.Record) string {
 			rows.WriteString(htmlEscape(t.Last4))
 			rows.WriteString(` · создан `)
 			rows.WriteString(htmlEscape(t.CreatedAt))
+			if t.ExpiresAt != "" {
+				if t.Expired(time.Now()) {
+					rows.WriteString(` · истёк `)
+				} else {
+					rows.WriteString(` · до `)
+				}
+				rows.WriteString(htmlEscape(t.ExpiresAt))
+			}
 			if t.CreatedBy != "" {
 				rows.WriteString(` · `)
 				rows.WriteString(htmlEscape(t.CreatedBy))

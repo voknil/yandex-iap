@@ -50,6 +50,9 @@ type Record struct {
 	// CreatedAt is RFC3339 UTC.
 	CreatedAt string `json:"created_at"`
 
+	// ExpiresAt is RFC3339 UTC; empty means the token never expires.
+	ExpiresAt string `json:"expires_at,omitempty"`
+
 	// CreatedBy is the admin email that issued the token. Blank when the
 	// file was populated by an external tool.
 	CreatedBy string `json:"created_by,omitempty"`
@@ -62,8 +65,8 @@ type Store interface {
 
 	// Create mints a new token. Returns the plaintext token ONCE so the
 	// caller can show it to the admin — no server-side recovery path exists
-	// afterwards.
-	Create(name, createdBy string) (Record, string, error)
+	// afterwards. A ttl of 0 means the token does not expire.
+	Create(name, createdBy string, ttl time.Duration) (Record, string, error)
 
 	// Delete removes the record with the given ID. Idempotent.
 	Delete(id string) error
@@ -75,6 +78,21 @@ type Store interface {
 
 // ErrInvalidName is returned by Create when the label is empty or too long.
 var ErrInvalidName = errors.New("token name must be 1–80 characters")
+
+// ErrInvalidTTL is returned by Create for a negative lifetime.
+var ErrInvalidTTL = errors.New("token lifetime must not be negative")
+
+// Expired reports whether the record has an expiry in the past.
+func (r Record) Expired(now time.Time) bool {
+	if r.ExpiresAt == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, r.ExpiresAt)
+	if err != nil {
+		return true // an unreadable expiry must fail closed
+	}
+	return !now.Before(t)
+}
 
 // File is the file-backed Store.
 type File struct {
@@ -151,7 +169,7 @@ func (f *File) List() ([]Record, error) {
 }
 
 // Create mints a new token.
-func (f *File) Create(name, createdBy string) (Record, string, error) {
+func (f *File) Create(name, createdBy string, ttl time.Duration) (Record, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len(name) > 80 {
 		return Record{}, "", ErrInvalidName
@@ -171,6 +189,12 @@ func (f *File) Create(name, createdBy string) (Record, string, error) {
 		Last4:     plaintext[len(plaintext)-4:],
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		CreatedBy: strings.TrimSpace(createdBy),
+	}
+	if ttl < 0 {
+		return Record{}, "", ErrInvalidTTL
+	}
+	if ttl > 0 {
+		rec.ExpiresAt = time.Now().UTC().Add(ttl).Format(time.RFC3339)
 	}
 
 	f.mu.Lock()
@@ -240,6 +264,9 @@ func (f *File) Validate(plaintext string) (*Record, bool) {
 	// Constant-time check against the canonical hash.
 	rec := f.records[idx]
 	if subtle.ConstantTimeCompare([]byte(rec.Hash), []byte(want)) != 1 {
+		return nil, false
+	}
+	if rec.Expired(time.Now()) {
 		return nil, false
 	}
 	return &rec, true
