@@ -6,6 +6,7 @@ the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-02
 ### Added
 - CI: lint (golangci-lint v2), test matrix (Go 1.22 and stable) with the race
   detector and a coverage summary, `govulncheck`, multi-arch image build with
